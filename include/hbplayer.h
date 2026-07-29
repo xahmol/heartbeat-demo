@@ -150,6 +150,16 @@ typedef struct {
     unsigned char current_arp;                      // SIDCurrentArp
     unsigned char target_freq_lo, target_freq_hi;   // SIDTargetFreq/H (portamento)
     unsigned char portamento;                       // SIDPortamento
+
+    // Active register image (SIDImage in the original) -- what
+    // WriteOneSID actually flushes to hardware each tick. Distinct from
+    // the working-parameter fields above: those feed into these via
+    // Modulations (Phase 9); Phase 6 sets these directly/statically at
+    // note-trigger time as a simplification (see hb_play_sid_note()).
+    unsigned char sid_freq_lo, sid_freq_hi;         // SIDFreq/H
+    unsigned char sid_pw_lo, sid_pw_hi;              // SIDPW/H
+    unsigned char sid_wave;                          // SIDWave (waveform | gate)
+    unsigned char sid_env_ad, sid_env_sr;            // SIDEnvAD/SR
 } hb_sid_channel_t;
 
 typedef struct {
