@@ -142,8 +142,11 @@ extern hb_state_t hb_state;
 
 // RowBuffer equivalent — one pattern row (streamed per-row via reu_fetch).
 // $00-$0D = 7 UA channels x 2 bytes (note, sample#)
-// $0E-...  = up to HB_MAX_SIDS x 3 channels x 2 bytes (note, sound#)
-// $3E (62) = Cmd-channel byte
+// $0E-$3D  = up to HB_MAX_SIDS x 3 channels x 2 bytes (note, sound#)
+// $3E-$3F (62-63) = Cmd channel, 2 bytes (command, param) like every
+// other channel -- confirmed from PlayPatternRow's Cmd-channel check,
+// which leaves Y=62 set when calling the command handler, so its
+// "RowBuffer+1,y" parameter read lands on byte 63.
 extern unsigned char hb_row_buf[64];
 
 // Per-SID-channel working state (x3 per chip). Kept byte-for-byte parallel
@@ -251,6 +254,12 @@ extern hb_songdata_t hb_songdata;
 // Phase-4-only debug counter -- see hbplayer.c's hb_tick(). Remove once
 // Phase 5 lands.
 extern unsigned int hb_debug_tick_count;
+
+// Xt track command's sync-output byte (ExtOut in the original): the Xt
+// command with a nonzero parameter writes that byte here instead of
+// killing the channel -- intended for a demo to poll and react to
+// music-synced cues. Never cleared automatically; matches the original.
+extern unsigned char hb_ext_out;
 
 #pragma compile("hbplayer.c")
 

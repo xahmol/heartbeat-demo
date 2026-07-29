@@ -295,6 +295,9 @@ void hb_stop_all(void)
 static void hb_sid_hard_restart(void);
 static void hb_play_pattern_row(void);
 static void hb_register_update(void);
+static void hb_ua_track_cmd(unsigned char ua_idx, unsigned char cmd_byte);
+static void hb_sid_track_cmd(unsigned char sid_idx, unsigned char ch_idx, unsigned char cmd_byte);
+static void hb_cmd_channel_cmd(unsigned char cmd_byte);
 
 // ---------------------------------------------------------------
 // hb_tick — port of PlayerUpdate (SID + UA; track commands are Phase 8,
@@ -775,7 +778,10 @@ static void hb_play_pattern_row_sid(void)
                 continue; // no note
 
             if (note & 0x80)
-                continue; // track command (Cmd8x_*) -- Phase 8 scope, no-op for now
+            {
+                hb_sid_track_cmd(sid_idx, ch_idx, note);
+                continue;
+            }
 
             if (note == 1)
             {
@@ -1079,7 +1085,10 @@ static void hb_play_pattern_row_ua(void)
             if (note == 0)
                 continue;
             if (note & 0x80)
-                continue; // track command (UATrackCMD) -- Phase 8 scope, no-op for now
+            {
+                hb_ua_track_cmd(ua_idx, note);
+                continue;
+            }
             if (note == 1)
             {
                 hb_stop_sample_note(ua_idx);
@@ -1107,14 +1116,17 @@ static void hb_register_update_ua(void)
 
 // ---------------------------------------------------------------
 // hb_play_pattern_row / hb_register_update — port of PlayPatternRow's and
-// RegisterUpdate's overall structure (Cmd-channel command dispatch, the
-// first thing in the original PlayPatternRow, is Phase 8 scope and
-// skipped here). These combine the SID and UA halves in the same order
-// as the original and do the once-per-row mute-state/tick-reset update
-// only after BOTH halves have run.
+// RegisterUpdate's overall structure. Checks the Cmd channel first
+// (RowBuffer[62]), matching the original's "Cmd channel first" comment,
+// then the SID and UA halves in the same order as the original, and does
+// the once-per-row mute-state/tick-reset update only after all three
+// have run.
 // ---------------------------------------------------------------
 static void hb_play_pattern_row(void)
 {
+    if (hb_row_buf[62] & 0x80)
+        hb_cmd_channel_cmd(hb_row_buf[62]);
+
     hb_play_pattern_row_sid();
     hb_play_pattern_row_ua();
 
@@ -1128,4 +1140,271 @@ static void hb_register_update(void)
 {
     hb_register_update_sid();
     hb_register_update_ua();
+}
+
+// =================================================================
+// Phase 8: Cmd8x_* track-command dispatch
+// =================================================================
+//
+// Command byte $80-$8A (11 commands): Pa(pan)/Bt(tempo)/Dn(slide down)/
+// Fi(finetune)/Iv(SID volume)/Le(pattern length)/Co(filter cutoff)/
+// Po(portamento)/Up(slide up)/Vo(volume)/Xt(kill/ext-sync). Each of the
+// three channel *types* (UA, SID, Cmd) has its own table mapping command
+// -> handler, with some commands ignored (CmdNone) on some channel
+// types -- ported as a switch per channel type instead of the original's
+// word-table-of-function-pointers (see UACommandTable/SIDCommandTable/
+// CmdCommandTable in player.s), same behavior either way.
+//
+// Command parameter is always RowBuffer[off+1] (the same byte slot that
+// holds "sample number" for a normal note) -- read by the dispatchers
+// below, not by each handler individually.
+
+unsigned char hb_ext_out;
+
+// ---- Cmd80 Pa: pan (UA only; ignored on SID/Cmd) ----
+static void hb_cmd_pa_ua(unsigned char ua_idx, unsigned char param)
+{
+    hb_ua[ua_idx].last_pan = (unsigned char)(param & 0x0F); // stored; applied via freq/rate path already
+    // NOTE: the original writes UAPan directly as an ACTIVE (non-shadowed)
+    // register, matching PlaySampleNote's own direct pan poke -- do the
+    // same here for consistency (immediate, not deferred).
+    {
+        volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
+        base[AUDIO_OFF_PAN] = (unsigned char)(param & 0x0F);
+    }
+}
+
+// ---- Cmd81 Bt: BPM tempo (all channel types) ----
+static void hb_cmd_bt(unsigned char param)
+{
+    hb_set_tempo(param);
+}
+
+// ---- Cmd82 Dn: slide down (UA/SID single-channel; Cmd = all channels) ----
+static void hb_cmd_dn_ua(unsigned char ua_idx, unsigned char param)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    c->portamento = param;
+    c->target_freq_lo = 0;
+    c->target_freq_hi = 0;
+}
+
+static void hb_cmd_dn_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+    c->portamento = param;
+    c->target_freq_lo = 0;
+    c->target_freq_hi = 0;
+}
+
+// Shared by Cmd82_Dn (Cmd channel) and Cmd88_Up (Cmd channel) -- slides
+// ALL SID + UA channels at once, matching Cmd82_Dn_SlideDown_Cmd/
+// Cmd88_Up_SlideUp_Cmd's shared ".common" tail in the original.
+static void hb_cmd_slide_all(unsigned char param, unsigned char target_lo, unsigned char target_hi)
+{
+    unsigned char i, ch;
+    for (i = 0; i < HB_UA_CHANNELS; i++)
+    {
+        hb_ua[i].portamento = param;
+        hb_ua[i].target_freq_lo = target_lo;
+        hb_ua[i].target_freq_hi = target_hi;
+    }
+    for (i = 0; i < HB_MAX_SIDS; i++)
+        for (ch = 0; ch < 3; ch++)
+        {
+            hb_sids[i].ch[ch].portamento = param;
+            hb_sids[i].ch[ch].target_freq_lo = target_lo;
+            hb_sids[i].ch[ch].target_freq_hi = target_hi;
+        }
+}
+
+// ---- Cmd83 Fi: finetune (UA/SID; ignored on Cmd) ----
+static void hb_cmd_fi_ua(unsigned char ua_idx, unsigned char param)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    c->finetune_lo = param;
+    c->finetune_hi = ((signed char)param < 0) ? 0xFF : 0x00;
+}
+
+static void hb_cmd_fi_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+    c->finetune = param;
+    c->finetune_hi = ((signed char)param < 0) ? 0xFF : 0x00;
+}
+
+// ---- Cmd84 Iv: SID volume (current chip on SID channel; ALL chips on
+// UA/Cmd channels -- low nibble only, filter type nibble preserved) ----
+static void hb_cmd_iv_sid(unsigned char sid_idx, unsigned char param)
+{
+    hb_sids[sid_idx].volume = (unsigned char)((hb_sids[sid_idx].volume & 0xF0) | (param & 0x0F));
+}
+
+static void hb_cmd_iv_all(unsigned char param)
+{
+    unsigned char i;
+    for (i = 0; i < HB_MAX_SIDS; i++)
+        hb_cmd_iv_sid(i, param);
+}
+
+// ---- Cmd85 Le: pattern length (all channel types), clamped to 64 ----
+static void hb_cmd_le(unsigned char param)
+{
+    hb_state.patt_length = (param < 0x40) ? param : 0x40;
+}
+
+// ---- Cmd86 Co: filter cutoff (SID only; ignored on UA/Cmd) ----
+static void hb_cmd_co(unsigned char sid_idx, unsigned char param)
+{
+    unsigned v = ((unsigned)param) << 5; // matches 3x lsr/ror -> effectively <<5 into a 16-bit split
+    hb_sids[sid_idx].filter_hi = (unsigned char)((v >> 8) | 0x80);
+    hb_sids[sid_idx].filter_lo = (unsigned char)v;
+}
+
+// ---- Cmd87 Po: portamento speed only, no target change (UA/SID; ignored on Cmd) ----
+static void hb_cmd_po_ua(unsigned char ua_idx, unsigned char param)
+{
+    hb_ua[ua_idx].portamento = param;
+}
+
+static void hb_cmd_po_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    hb_sids[sid_idx].ch[ch_idx].portamento = param;
+}
+
+// ---- Cmd88 Up: slide up (UA/SID single-channel; Cmd = all channels) ----
+static void hb_cmd_up_ua(unsigned char ua_idx, unsigned char param)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    c->portamento = param;
+    c->target_freq_lo = 0xC0;
+    c->target_freq_hi = 0x17;
+}
+
+static void hb_cmd_up_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+    c->portamento = param;
+    c->target_freq_lo = 0xC0;
+    c->target_freq_hi = 0x17;
+}
+
+// ---- Cmd89 Vo: volume (UA/SID; ignored on Cmd) ----
+static void hb_cmd_vo_ua(unsigned char ua_idx, unsigned char param)
+{
+    volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
+    unsigned char vol = (unsigned char)(param & 0x3F);
+    base[AUDIO_OFF_VOL] = vol; // immediate, active register -- matches the original's direct poke
+    hb_ua[ua_idx].last_volume = vol;
+}
+
+static void hb_cmd_vo_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    // Sets the SUSTAIN nibble of EnvSR only, keeping RELEASE untouched.
+    // The 6502's 4x ASL truncates to 8 bits each step (unlike a C `int`
+    // shift), so the cast below is required to match exactly.
+    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+    unsigned char shifted = (unsigned char)(param << 4);
+    c->sid_env_sr = (unsigned char)((c->sid_env_sr & 0x0F) | shifted);
+}
+
+// ---- Cmd8A Xt: nonzero param -> sync byte out; zero param -> kill/reset ----
+static void hb_cmd_xt_ua(unsigned char ua_idx, unsigned char param)
+{
+    if (param != 0) { hb_ext_out = param; return; }
+    hb_ua[ua_idx].shadow_gate = 0x10;
+}
+
+static void hb_cmd_xt_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
+{
+    if (param != 0) { hb_ext_out = param; return; }
+    {
+        hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+        c->sid_env_ad = 0;
+        c->sid_env_sr = 0;
+        c->sid_wave = 0;
+        c->sid_freq_lo = 0;
+        c->sid_freq_hi = 0;
+        c->wave_arp_count = 0;
+        c->gate_mask = 0xFE;
+    }
+}
+
+static void hb_cmd_xt_cmd(unsigned char param)
+{
+    if (param != 0) { hb_ext_out = param; return; }
+    hb_init_ua_and_sids(); // "Xt00 on Cmd channel resets everything"
+}
+
+// ---- Dispatchers -- map command index (note byte & 0x7F, valid 0-10) to
+// the per-channel-type handler, matching UACommandTable/SIDCommandTable/
+// CmdCommandTable's CmdNone gaps exactly. ----
+
+static void hb_ua_track_cmd(unsigned char ua_idx, unsigned char cmd_byte)
+{
+    unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
+    unsigned char param = hb_row_buf[ua_idx * 2 + 1];
+
+    if (idx > 0x0A)
+        return;
+
+    switch (idx)
+    {
+    case 0x00: hb_cmd_pa_ua(ua_idx, param); break;
+    case 0x01: hb_cmd_bt(param); break;
+    case 0x02: hb_cmd_dn_ua(ua_idx, param); break;
+    case 0x03: hb_cmd_fi_ua(ua_idx, param); break;
+    case 0x04: hb_cmd_iv_all(param); break; // Iv affects all SIDs on UA channel
+    case 0x05: hb_cmd_le(param); break;
+    case 0x06: break; // Co ignored on UA channel
+    case 0x07: hb_cmd_po_ua(ua_idx, param); break;
+    case 0x08: hb_cmd_up_ua(ua_idx, param); break;
+    case 0x09: hb_cmd_vo_ua(ua_idx, param); break;
+    case 0x0A: hb_cmd_xt_ua(ua_idx, param); break;
+    }
+}
+
+static void hb_sid_track_cmd(unsigned char sid_idx, unsigned char ch_idx, unsigned char cmd_byte)
+{
+    unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
+    unsigned char off = (unsigned char)(14 + sid_idx * 6 + ch_idx * 2);
+    unsigned char param = hb_row_buf[off + 1];
+
+    if (idx > 0x0A)
+        return;
+
+    switch (idx)
+    {
+    case 0x00: break; // Pa ignored on SID channel
+    case 0x01: hb_cmd_bt(param); break;
+    case 0x02: hb_cmd_dn_sid(sid_idx, ch_idx, param); break;
+    case 0x03: hb_cmd_fi_sid(sid_idx, ch_idx, param); break;
+    case 0x04: hb_cmd_iv_sid(sid_idx, param); break; // Iv affects current SID chip
+    case 0x05: hb_cmd_le(param); break;
+    case 0x06: hb_cmd_co(sid_idx, param); break;
+    case 0x07: hb_cmd_po_sid(sid_idx, ch_idx, param); break;
+    case 0x08: hb_cmd_up_sid(sid_idx, ch_idx, param); break;
+    case 0x09: hb_cmd_vo_sid(sid_idx, ch_idx, param); break;
+    case 0x0A: hb_cmd_xt_sid(sid_idx, ch_idx, param); break;
+    }
+}
+
+static void hb_cmd_channel_cmd(unsigned char cmd_byte)
+{
+    unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
+    unsigned char param = hb_row_buf[63]; // Cmd channel's own "+1" byte
+
+    if (idx > 0x0A)
+        return;
+
+    switch (idx)
+    {
+    case 0x01: hb_cmd_bt(param); break;
+    case 0x02: hb_cmd_slide_all(param, 0x00, 0x01); break; // Dn on Cmd: slides ALL sounds
+    case 0x04: hb_cmd_iv_all(param); break;
+    case 0x05: hb_cmd_le(param); break;
+    case 0x08: hb_cmd_slide_all(param, 0x00, 0x17); break; // Up on Cmd: slides ALL sounds
+    case 0x0A: hb_cmd_xt_cmd(param); break;
+    default: break; // Pa/Fi/Co/Po/Vo ignored on Cmd channel
+    }
 }
