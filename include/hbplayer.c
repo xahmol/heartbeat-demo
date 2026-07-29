@@ -2,11 +2,13 @@
 Heartbeat Soundtracker player — C/Oscar64 port, implementation
 See hbplayer.h for API documentation and NOTICE.md for attribution.
 
-Phase 1 (current): embedded tables + data structures only. No player
-logic yet — see /home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md
-for the full phasing.
+Phases 1-3 done: data structures, song loader, NTSC detection, init/tempo/
+stop-all. No tick IRQ yet (Phase 4) -- see
+/home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md for phasing.
 ******************************************************************/
 
+#include <c64/cia.h>
+#include <string.h>
 #include "hbplayer.h"
 #include "audio.h"
 #include "ultimate_common_lib.h"
@@ -140,4 +142,174 @@ char hb_load(char *filename, unsigned long reu_addr)
     reu_fetch(&hb_songdata, hb_state.reu_song_base, (unsigned)HB_SONGDATA_SIZE);
 
     return 1;
+}
+
+// ---------------------------------------------------------------
+// hb_detect_ntsc — port of main.s's DetectNTSC raster-line timing check.
+//
+// Only the detection test itself is ported. The original also patches its
+// BPM/frequency tables in place once NTSC is detected (converting them
+// permanently) — this port deliberately avoids that: hb_set_tempo() and
+// the (Phase 9) frequency lookup select between the PAL/NTSC embedded
+// tables via this flag at each use instead, so no runtime mutation of
+// #embed-sourced data is needed (see port plan §4).
+//
+// Written as an inline __asm block (not re-derived in C) because the
+// timing-sensitive raster-line poll is easy to subtly break via re-
+// expression in C; ported instruction-for-instruction instead. Verified
+// against the reference algorithm and Oscar64's inline-asm label/branch
+// support with a standalone test build (2026-07-29) — see oscar64manual.md.
+//
+// IMPORTANT: the asm block stores its result into the file-scope static
+// hb_ntsc_probe below, NOT a local variable. A local (even `volatile`, even
+// routed through a __noinline barrier call) gets silently treated as
+// compile-time-constant 0 by Oscar64's optimizer at -O2 — confirmed via a
+// standalone test build showing the final `hb_state.x = local;` compiles to
+// an unconditional `LDA #$00 / STA ...`, discarding the asm block's actual
+// computed value entirely. Writing directly to a static/global from inside
+// the __asm block does not have this problem (verified: real STA-then-LDA
+// round trip in the generated .asm). See oscar64manual.md's gotcha list —
+// this is a third confirmed instance of Oscar64 not tracking inline-asm
+// side effects for its dataflow analysis, distinct from (but same family
+// as) the reu_count_pages() bug fixed in detect.c.
+// ---------------------------------------------------------------
+static unsigned char hb_ntsc_probe;
+
+char hb_detect_ntsc(void)
+{
+    __asm {
+        php
+        sei
+    ntsc_w1:
+        lda $d012
+    ntsc_w2:
+        cmp $d012
+        beq ntsc_w2
+        bmi ntsc_w1
+        plp
+        and #$03
+        cmp #$03
+        bne ntsc_is
+        lda #$00
+        jmp ntsc_fin
+    ntsc_is:
+        lda #$01
+    ntsc_fin:
+        sta hb_ntsc_probe
+    }
+
+    hb_state.ntsc_detected = hb_ntsc_probe;
+    return hb_ntsc_probe;
+}
+
+// ---------------------------------------------------------------
+// Init helpers — split to match the original's fall-through structure:
+// InitUltimateAudioAndSIDs (UA channels + falls through into SID reset)
+// vs. InitSIDImageAndVolumes alone (what StopAllSound jumps directly to,
+// deliberately skipping the UA reset -- see port plan discussion; this is
+// the reference player's actual behavior, ported as-is for exactness).
+// ---------------------------------------------------------------
+static void hb_init_sid_image_and_volumes(void)
+{
+    unsigned char i;
+
+    memset(hb_sids, 0, sizeof(hb_sids));
+    for (i = 0; i < HB_MAX_SIDS; i++)
+    {
+        hb_sids[i].addr = (unsigned)hb_songdata.sid_addresses[i * 2] |
+                           ((unsigned)hb_songdata.sid_addresses[i * 2 + 1] << 8);
+        hb_sids[i].volume = hb_songdata.sid_volumes[i];
+    }
+}
+
+static void hb_init_ua_and_sids(void)
+{
+    unsigned char ch;
+
+    memset(hb_ua, 0, sizeof(hb_ua));
+    for (ch = 0; ch < HB_UA_CHANNELS; ch++)
+    {
+        volatile unsigned char *base =
+            (volatile unsigned char *)(unsigned long)audio_ch_base[ch];
+        base[AUDIO_OFF_VOL] = 0;
+        base[AUDIO_OFF_CTR] = 0;
+    }
+
+    hb_init_sid_image_and_volumes();
+}
+
+// ---------------------------------------------------------------
+// hb_set_tempo — port of SetTempo. Reprograms CIA1 Timer A from the
+// embedded BPM table (not a formula -- the reference deliberately uses a
+// precomputed PAL table); applies the NTSC delta additively when
+// hb_state.ntsc_detected, instead of the original's one-time in-place
+// table mutation (see port plan §4).
+//
+// php/plp (not sei/cli) to match the original exactly: this may be called
+// from within the (Phase 4) tick IRQ via a Bt track command, where
+// unconditionally re-enabling interrupts at the end (cli) would be wrong.
+// ---------------------------------------------------------------
+void hb_set_tempo(unsigned char bpm_minus_64)
+{
+    unsigned char lo, hi;
+
+    __asm { php }
+    __asm { sei }
+
+    hb_state.tempo = bpm_minus_64;
+    hb_state.tempo_ticks = HB_BPM_TEMPO_TICKS(bpm_minus_64);
+
+    lo = HB_BPM_TIMER_LO(bpm_minus_64);
+    hi = HB_BPM_TIMER_HI(bpm_minus_64);
+    if (hb_state.ntsc_detected)
+    {
+        unsigned char old_lo = lo;
+        lo = (unsigned char)(lo + hb_bpm_ntsc_add[bpm_minus_64]);
+        if (lo < old_lo)   // unsigned add wrapped -> carry into hi
+            hi++;
+    }
+    cia1.ta = (unsigned)lo | ((unsigned)hi << 8);
+
+    __asm { plp }
+}
+
+// ---------------------------------------------------------------
+// hb_stop_all — port of StopAllSound. Matches the reference exactly:
+// only resets SID working state (jmp InitSIDImageAndVolumes in the
+// original skips the UA channel reset entirely -- ported as-is, not
+// "fixed", since bit-exact parity with the reference player is the goal).
+// ---------------------------------------------------------------
+void hb_stop_all(void)
+{
+    hb_state.play_mode = 0;
+    hb_init_sid_image_and_volumes();
+}
+
+// ---------------------------------------------------------------
+// hb_init — port of PlayerInit's state-setting body. Does NOT yet install
+// the tick IRQ / enable CIA1 Timer A or raster IRQ (that's Phase 4) --
+// call hb_detect_ntsc() before this.
+// ---------------------------------------------------------------
+void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
+{
+    hb_init_ua_and_sids();
+
+    hb_set_tempo(hb_songdata.starting_tempo);
+
+    hb_state.patt_length = hb_songdata.song_pattern_length;
+    hb_state.patt_step = (unsigned char)(hb_state.patt_length - 1);
+
+    hb_state.tick = (unsigned char)(hb_songdata.hardrestart_time + 3);
+
+    hb_state.last_ua_mutes = 0x7f;
+    hb_state.last_sid_mutes = 0xff;
+
+    hb_state.patt_ptr = 0;
+    hb_state.patt_bank = 0;
+    hb_state.transpose_now = 0;
+
+    hb_state.seq_start_pos = seq_start_pos;
+    hb_state.seq_step = (unsigned char)(seq_start_pos - 1);
+
+    hb_state.play_mode = play_mode;
 }

@@ -201,7 +201,8 @@ char hb_detect_ntsc(void);
 
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode);
 // PlayerInit port: reset player state, init SID images/volumes and UA
-// channels, install the tick IRQ, set starting tempo, start playback.
+// channels, set starting tempo. Does NOT yet install the tick IRQ (added
+// in the port's Phase 4) -- call hb_detect_ntsc() before this.
 
 void hb_stop_all(void);
 // StopAllSound port: stop playback, silence all SIDs/UA channels.

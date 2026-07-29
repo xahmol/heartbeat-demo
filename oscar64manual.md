@@ -732,6 +732,64 @@ definition, not call site, if a call-site scope doesn't work), or via an
 `__noinline` call-boundary barrier if the affected value is a `volatile`
 local rather than a whole function's control flow.
 
+## Third confirmed instance: inline-`__asm`-block store to a local variable ignored entirely
+
+Found in heartbeat-demo (2026-07-29) porting a raster-line PAL/NTSC detection
+routine (`hb_detect_ntsc()`, `include/hbplayer.c`) that computes a 0/1 result
+inside an inline `__asm { }` block (via branches, ending `sta result` where
+`result` is a local) and then uses that local in ordinary C code afterward
+(`hb_state.ntsc_detected = result; return result;`).
+
+**Symptom:** compiles with `warning 2009: Use of uninitialized variable
+'result'` — which turned out to be a correct diagnostic, not a false
+positive. The generated `.asm` for `hb_state.ntsc_detected = result;`
+compiled to an unconditional `LDA #$00 / STA hb_state.ntsc_detected`,
+completely discarding the value the asm block actually computed and stored.
+The raster loop itself compiled correctly (real `BEQ`/`BMI`/`BNE` branches
+verified in the `.asm`) — only the hand-off of the result out of the asm
+block into subsequent C code was wrong.
+
+**This is worse than the two instances above:** it does not require the
+value to come from a `volatile`-qualified read of a hardware/library side
+effect (instance 1) or from accumulation across conditionally-taken branches
+(instance 2) — a plain local, written by a single unconditional `sta` inside
+an inline asm block and read once immediately after, still gets treated as
+compile-time-constant (apparently defaulting to whatever the declaration's
+"uninitialized" value is assumed to be, i.e. 0).
+
+**Confirmed NOT sufficient:** declaring the local `volatile`. **Confirmed
+NOT sufficient:** routing the read through a `__noinline` barrier call
+(the instance-1 fix) — with a compile-time-constant argument the barrier
+call itself gets trivially inlined/folded away, defeating the barrier.
+Both retested via a standalone build with `.asm` inspection; the bogus
+`LDA #$00` reappeared either way.
+
+**Confirmed workaround:** don't use a local at all — have the `__asm` block
+store directly into a file-scope `static` variable, then read that static
+from ordinary C code:
+```c
+static unsigned char hb_ntsc_probe;   // file-scope, not a local
+
+char hb_detect_ntsc(void)
+{
+    __asm {
+        // ... raster-line test ...
+        sta hb_ntsc_probe   // store to a real global, not a local
+    }
+    hb_state.ntsc_detected = hb_ntsc_probe;  // now a genuine LDA/STA round trip
+    return hb_ntsc_probe;
+}
+```
+Verified via `.asm`: this produces a real `STA hb_ntsc_probe` inside the asm
+block followed by a real `LDA hb_ntsc_probe` / `STA hb_state.ntsc_detected`
+afterward — no constant substitution, no warning.
+
+**Pattern to add to the "watch for" list above:** whenever an inline
+`__asm { }` block's *only* purpose is computing a value for later C-level
+use, give it a file-scope `static` destination rather than a local variable
+— even a `volatile` local is not safe here. This is now the default way any
+inline-asm-computed value should be threaded into this codebase's C code.
+
 ### `memmap.h` — Memory Mapping
 
 ```c

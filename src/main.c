@@ -222,9 +222,11 @@ int main(void)
     if (detected_audio_version > 0)
     {
         char buf[40];
+        char song_loaded;
         screen_info("Loading Heartbeat song...");
 
-        if (hb_load(hb_song_file, HB_SONG_REU_BASE))
+        song_loaded = hb_load(hb_song_file, HB_SONG_REU_BASE);
+        if (song_loaded)
         {
             sprintf(buf, "tempo %u, %u SIDs",
                     hb_songdata.starting_tempo, HB_MAX_SIDS);
@@ -234,6 +236,24 @@ int main(void)
         {
             screen_result("Song ", 0, "Not found");
             screen_hint("Place .reu in idi8b/heartbeat-demo/");
+        }
+
+        // ---- Heartbeat player: Phase 3 init/tempo debug check ----
+        // Verifies hb_detect_ntsc/hb_init/hb_set_tempo against an
+        // independent cross-check of bpmtable.bin's actual bytes at the
+        // loaded song's tempo index (done offline, not on-screen).
+        // Temporary -- condensed once Phase 4's IRQ makes this audible.
+        if (song_loaded)
+        {
+            hb_detect_ntsc();
+            hb_init(0, 1);
+
+            sprintf(buf, "ntsc:%u  ticks:%u  cia:%04x",
+                    hb_state.ntsc_detected, hb_state.tempo_ticks, cia1.ta);
+            screen_info(buf);
+            sprintf(buf, "patlen:%u  tick:%u  step:%u",
+                    hb_state.patt_length, hb_state.tick, hb_state.seq_step);
+            screen_info(buf);
         }
     }
 
