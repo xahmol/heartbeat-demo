@@ -226,7 +226,7 @@ int main(void)
 
         if (hb_load(hb_song_file, HB_SONG_REU_BASE))
         {
-            sprintf(buf, "Loaded, tempo %u, %u SIDs",
+            sprintf(buf, "tempo %u, %u SIDs",
                     hb_songdata.starting_tempo, HB_MAX_SIDS);
             screen_result("Song ", 1, buf);
         }
