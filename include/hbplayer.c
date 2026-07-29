@@ -322,11 +322,26 @@ __interrupt void hb_tick(void)
 // tempo) and the CIA1 Timer A IRQ (tempo-dependent tick rate) at the same
 // time: the raster IRQ's only job is guaranteed ~50Hz keyboard scanning
 // (SCNKEY) regardless of how slow the current BPM's tick rate is, while
-// the CIA branch runs the real player update and deliberately skips
-// SCNKEY (it would double-scan against the raster IRQ). Both chain to
-// $EA81 -- a KERNAL entry point *past* its own internal SCNKEY call,
-// chosen specifically because both branches here already do their own
-// keyboard handling (or deliberately skip it) before reaching it.
+// the CIA branch runs the real player update. The reference chains both
+// branches to $EA81 (a KERNAL entry point *past* its own internal SCNKEY
+// call, skipping a double-scan against the raster branch's manual SCNKEY).
+//
+// PORT DEVIATION (hardware-tested, 2026-07-29): chaining to $EA81 here
+// causes hb_tick to stop being invoked after only ~2 firings (confirmed via
+// a free-running debug counter that should climb continuously but instead
+// plateaus within milliseconds) -- with no crash and the keyboard still
+// responding, consistent with hitting an unprotected KERNAL/BASIC-ROM-
+// dependent path under this project's MMAP_NO_BASIC memory config that
+// isn't covered by main.c's existing $0310/$A002 UDTIM/CBINV safety
+// patches (those patches were written for -- and documented against --
+// $EA31's specific call chain, per main.c's own comments, not $EA81's).
+// Switched both branches to $EA31 instead, matching the already-proven,
+// already-hardware-verified pattern this project's main.c is designed
+// around (see UltimateDemo2026/include/modplay.c's modplay_irq, which
+// uses the same target). Accepted tradeoff: both branches now scan the
+// keyboard (redundant, but harmless -- cheap at 64 MHz turbo), so the
+// manual SCNKEY call in the raster branch is removed (chaining to $EA31
+// already does it).
 //
 // Per the "named asm blocks are addresses, not callables" rule (see
 // oscar64manual.md), this is installed via `*((void**)0x0314) = hb_irq;`,
@@ -340,12 +355,11 @@ __asm hb_irq
 
     jsr hb_tick
     lda $dc0d           // read CIA1 ICR -- acknowledges Timer A IRQ (clear-on-read)
-    jmp $ea81
+    jmp $ea31
 
 hb_irq_raster:
     sta $d019           // acknowledge raster IRQ
-    jsr $ff9f            // SCNKEY
-    jmp $ea81
+    jmp $ea31           // $EA31's own sequence includes SCNKEY
 }
 
 // ---------------------------------------------------------------
