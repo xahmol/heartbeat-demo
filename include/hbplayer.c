@@ -65,17 +65,6 @@ hb_sid_chip_t     hb_sids[HB_MAX_SIDS];
 hb_ua_channel_t   hb_ua[HB_UA_CHANNELS];
 
 // ---------------------------------------------------------------
-// Phase-1-only debug helper — see hbplayer.h
-// ---------------------------------------------------------------
-void hb_debug_table_bytes(unsigned char out[5]) {
-    out[0] = hb_bpmtable[0];
-    out[1] = hb_bpm_ntsc_add[0];
-    out[2] = hb_ultfreq[0];
-    out[3] = hb_palfreq[0];
-    out[4] = hb_ntscfreq[0];
-}
-
-// ---------------------------------------------------------------
 // hb_load — scan SD/USB drives for `filename`, load it into REU at
 // `reu_addr`, then pull the song-data header blob into hb_songdata.
 //

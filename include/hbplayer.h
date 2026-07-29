@@ -218,12 +218,6 @@ void hb_stop_fx(unsigned char ch);
 
 extern hb_songdata_t hb_songdata;
 
-// Phase-1-only debug helper: exposes the first byte of each embedded table
-// so main.c can cross-check #embed content against a hex dump of the
-// reference .bin files. Remove once Phase 3 (hb_set_tempo) exercises the
-// same tables for real.
-void hb_debug_table_bytes(unsigned char out[5]);
-
 #pragma compile("hbplayer.c")
 
 #endif

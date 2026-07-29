@@ -213,76 +213,22 @@ int main(void)
         screen_result("Audio", 1, detail);
     }
 
-    // ---- Heartbeat player: Phase 1 struct-size debug check ------
-    // Confirms the song-data / record structs are byte-exact against the
-    // Heartbeat file format offsets (see port plan §3a). Temporary — remove
-    // once Phase 2's loader can validate this against a real song instead.
-    {
-        char buf[40];
-        screen_blank_line();
-        screen_info("Heartbeat struct sizes:");
-        sprintf(buf, "  songdata  : %u (want 8192)", (unsigned)sizeof(hb_songdata_t));
-        screen_info(buf);
-        sprintf(buf, "  sample rec: %u (want 32)", (unsigned)sizeof(hb_sample_params_t));
-        screen_info(buf);
-        sprintf(buf, "  inst rec  : %u (want 64)", (unsigned)sizeof(hb_inst_params_t));
-        screen_info(buf);
-        sprintf(buf, "  state     : %u", (unsigned)sizeof(hb_state_t));
-        screen_info(buf);
-        sprintf(buf, "  sid chip  : %u", (unsigned)sizeof(hb_sid_chip_t));
-        screen_info(buf);
-        sprintf(buf, "  ua channel: %u", (unsigned)sizeof(hb_ua_channel_t));
-        screen_info(buf);
-
-        // Cross-check #embed content against a hex dump of the .bin files
-        // (bpmtable/bpmtable-ntsc/ultfreq/palfreq/ntscfreq first bytes)
-        {
-            unsigned char tb[5];
-            hb_debug_table_bytes(tb);
-            sprintf(buf, "  tables[0] : %02x %02x %02x %02x %02x",
-                    tb[0], tb[1], tb[2], tb[3], tb[4]);
-            screen_info(buf);
-        }
-    }
-
-    // ---- Heartbeat player: Phase 2 song-load debug check --------
-    // Loads the test song via UCI (scanning SD/USB drives) and prints
-    // song-data header fields, cross-checked against a hex dump of the
-    // .reu file taken independently of this code path. Temporary —
-    // superseded by real playback once later phases land.
+    // ---- Heartbeat player: load test song -----------------------
+    // Struct-layout and #embed-table correctness (Phase 1) and the song
+    // loader (Phase 2) have both been hardware-verified already — see
+    // port plan / oscar64manual.md. Keep just a one-line confirmation here
+    // so the 40x25 screen doesn't overflow; playback itself lands in later
+    // phases.
     if (detected_audio_version > 0)
     {
         char buf[40];
-        screen_blank_line();
         screen_info("Loading Heartbeat song...");
 
         if (hb_load(hb_song_file, HB_SONG_REU_BASE))
         {
-            screen_result("Song ", 1, "Loaded");
-            sprintf(buf, "  tempo: %u  hardrestart: %u",
-                    hb_songdata.starting_tempo, hb_songdata.hardrestart_time);
-            screen_info(buf);
-            sprintf(buf, "  pattern length: %u",
-                    hb_songdata.song_pattern_length);
-            screen_info(buf);
-            sprintf(buf, "  sidvol: %02x %02x %02x %02x %02x %02x %02x %02x",
-                    hb_songdata.sid_volumes[0], hb_songdata.sid_volumes[1],
-                    hb_songdata.sid_volumes[2], hb_songdata.sid_volumes[3],
-                    hb_songdata.sid_volumes[4], hb_songdata.sid_volumes[5],
-                    hb_songdata.sid_volumes[6], hb_songdata.sid_volumes[7]);
-            screen_info(buf);
-            sprintf(buf, "  sidaddr1: %02x%02x %02x%02x %02x%02x %02x%02x",
-                    hb_songdata.sid_addresses[1], hb_songdata.sid_addresses[0],
-                    hb_songdata.sid_addresses[3], hb_songdata.sid_addresses[2],
-                    hb_songdata.sid_addresses[5], hb_songdata.sid_addresses[4],
-                    hb_songdata.sid_addresses[7], hb_songdata.sid_addresses[6]);
-            screen_info(buf);
-            sprintf(buf, "  sidaddr2: %02x%02x %02x%02x %02x%02x %02x%02x",
-                    hb_songdata.sid_addresses[9], hb_songdata.sid_addresses[8],
-                    hb_songdata.sid_addresses[11], hb_songdata.sid_addresses[10],
-                    hb_songdata.sid_addresses[13], hb_songdata.sid_addresses[12],
-                    hb_songdata.sid_addresses[15], hb_songdata.sid_addresses[14]);
-            screen_info(buf);
+            sprintf(buf, "Loaded, tempo %u, %u SIDs",
+                    hb_songdata.starting_tempo, HB_MAX_SIDS);
+            screen_result("Song ", 1, buf);
         }
         else
         {
@@ -294,8 +240,6 @@ int main(void)
     // ---- Detection complete ------------------------------------
     screen_blank_line();
     screen_info("Detection complete.");
-    screen_blank_line();
-    screen_info("Heartbeat player integration: TODO");
     screen_blank_line();
     screen_wait_key(NULL);
 
