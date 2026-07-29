@@ -1588,29 +1588,50 @@ __asm crt_breakpoint { rts }
 #pragma runtime(breakpoint, crt_breakpoint)
 ```
 
-### Inline asm syntax for non-ZP hardware addresses
+### Inline asm syntax: `$` immediates and addresses actually work fine (correction)
 
-In `__asm { }` inline blocks, absolute addresses above $FF require bracket notation:
+An earlier version of this note claimed `$0e`-style immediates (`lda #$0e`) and bare
+`$XXXX` absolute addresses (`sta $030f`) fail in inline `__asm { }` blocks (requiring
+decimal/`0x` immediates and `[0xXXXX]` bracket-notation addresses instead), and that
+named `__asm funcname { }` blocks accept `$` for addresses but still reject it for
+immediates.
+
+**Retested and found not to reproduce** (heartbeat-demo, 2026-07-29, same Oscar64
+build documented elsewhere in this file as v1.32.272 / commit `0808a62`): both of the
+following compile with no errors —
 ```c
-// WRONG — $ prefix only works for named asm blocks (addresses), NOT for immediates ever
-lda #$0e         // error: End of line expected ($ invalid for immediates)
-sta $030f        // error or wrong result in inline blocks
+// Inline block: $ immediate AND bare $-address both fine
+int main(void) {
+    __asm {
+        lda #$0e
+        sta $030f
+    }
+    return 0;
+}
 
-// CORRECT in inline __asm { }:
-lda #14          // immediate: use decimal
-lda #0x0e        // immediate: 0x prefix also works
-sta [0x030f]     // absolute address > $FF: use [0xXXXX] bracket notation
-lda [0x0300]
-```
-
-In **named** `__asm funcname { }` blocks, `$XX` IS valid for addresses but still NOT for immediates:
-```c
+// Named block: $ immediate fine too
 __asm my_func {
-    sta $0245    // OK: $ for addresses in named blocks
-    lda #$0e     // STILL wrong — named blocks also reject $ for immediates
-    lda #14      // correct
+    lda #$01
+    and #$0e
+    sta $0400
+    rts
 }
 ```
+This also matches `UltimateDemo2026/include/modplay.c`'s `modplay_irq` named `__asm`
+block, which already uses `and #$01` (a `$`-prefixed immediate) in production code.
+`[0xXXXX]` bracket notation and decimal/`0x` immediates still work too (unaffected,
+just no longer *required*) — use whichever reads better; `$XXXX` matches 6502
+convention and the original assembly source more closely when porting existing code.
+
+If you hit a real "End of line expected" or "Function expected" error near a `$`
+token in an `__asm` block, look elsewhere first (e.g. calling a named `__asm` block
+with `()` instead of taking its address, or a different address range) before
+assuming this specific restriction — it does not currently reproduce.
+
+**Named asm blocks are addresses, not callables:** a named `__asm funcname { }` block
+is not invoked as `funcname()` — attempting that gives `error 3013: Function expected
+for call`. Instead take its address, e.g. to install it as a hardware vector:
+`*((void **)0x0314) = funcname;` (see `modplay_irq`'s installation pattern).
 
 ### `#pragma compile` path resolution
 
