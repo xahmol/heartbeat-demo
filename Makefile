@@ -95,9 +95,9 @@ ULTFTP   = ftp://$(ULTHOST)
 ZIPFILE  = build/$(MAIN)-$(VERSION).zip
 
 .SUFFIXES:
-.PHONY: all clean deploy zip check-deploy
+.PHONY: all clean deploy zip check-deploy docs
 
-all: $(TARGET) zip
+all: $(TARGET) zip README.pdf
 
 $(TARGET): $(ALLSRCS)
 	@$(MKDIR) build 2>$(NULLDEV) ; true
@@ -110,14 +110,28 @@ clean:
 	$(DEL) build/*.lbl 2>$(NULLDEV) ; true
 	$(DEL) build/*.zip 2>$(NULLDEV) ; true
 
-zip: $(TARGET)
+zip: $(TARGET) README.pdf
 	$(MKDIR) build/$(INSTALL_PATH) 2>$(NULLDEV) ; true
 	cp $(TARGET)   build/$(INSTALL_PATH)/$(MAIN).prg
 	cp README.md   build/$(INSTALL_PATH)/README.md
+	@if [ -f README.pdf ]; then cp README.pdf build/$(INSTALL_PATH)/README.pdf; fi
 	@if [ -f "$(SONGFILE)" ]; then cp "$(SONGFILE)" build/$(INSTALL_PATH)/; else \
 		echo "WARNING: $(SONGFILE) not found -- zip built without test song"; fi
 	cd build && zip -r $(MAIN)-$(VERSION).zip idi8b/
 	$(RMDIR) build/idi8b 2>$(NULLDEV) ; true
+
+# Regenerate README.pdf from README.md (requires pandoc + texlive-xetex).
+# Install: sudo apt install pandoc texlive-xetex
+# Warns and skips (does not fail the build) if pandoc is unavailable, since
+# README.pdf is committed to git and only needs regenerating when docs change.
+docs: README.pdf
+
+README.pdf: README.md pandoc-defaults.yaml pandoc-header.tex
+	@if which pandoc >/dev/null 2>&1; then \
+		pandoc --defaults=pandoc-defaults.yaml README.md -o README.pdf; \
+	else \
+		echo "WARNING: pandoc not found -- README.pdf not updated (install: sudo apt install pandoc texlive-xetex)"; \
+	fi
 
 check-deploy:
 	@curl -s --connect-timeout 3 $(ULTFTP)/ >/dev/null 2>&1 || \

@@ -47,9 +47,19 @@ The Makefile sets `-i=include -tm=c64 -tf=prg -O2 -dNOFLOAT`. Oscar64 follows
 | `build/` | Compiler output (`.prg`, `.map`, `.asm`, `.lbl`) |
 | `reference/heartbeat-player-src/` | **Gitignored, local-only.** Heartbeat Soundtracker standalone player 6502 source (from the gold license; redistribution permitted per `NOTICE.md`, but kept unpublished by choice — only the C conversion is public) — see below |
 
-This repo currently has **no visual effects or Heartbeat playback yet** — it is a
-buildchain scaffold only. Hardware detection (`src/detect.c`) confirms UCI, 16 MB REU,
-turbo, and Ultimate Audio are present and working before any porting work begins.
+**Status: the Heartbeat player port is feature-complete** (all 10 phases of the
+porting plan done and hardware-verified — full song playback, all SID + Ultimate
+Audio channels, modulation, in-pattern track commands, and a `buttons.s`-equivalent
+test harness). Hardware detection (`src/detect.c`) confirms UCI, 16 MB REU, turbo,
+and Ultimate Audio are present and working before playback starts.
+
+For the player library's public API and the song file format, see
+[`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md). For internal design (tick/
+IRQ architecture, data flow, zero-page verification methodology), see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) — read that before making any change to
+`hbplayer.c`'s tick-reachable call tree, since it documents a real, recurring
+zero-page hazard (`$02`/`mul16by8`) and the exact method used to re-verify it after
+every phase.
 
 ## Toolchain: Oscar64
 
@@ -127,12 +137,15 @@ Key facts for the future C port (see `player.s` header comment for the full API)
 - Song data must be preloaded into REU by the host program (via UCI file load into
   REU, see `ultimate_dos_lib.h`) before calling `PlayerInit`.
 
-**Porting approach (for future planning, not yet started):** the cleanest path is
-likely a hybrid — keep tight per-tick 6502 routines (`RegisterUpdate`, `WriteOneSID`,
-frequency table lookups) as inline `__asm` where C introduces too much overhead, but
-port control flow, initialization, and one-shot logic (`PlayerInit`, `SetTempo`,
-`PlayFX`/`StopFX`, pattern-row parsing) to C. Decide this properly once profiling
-shows where 6502 cycles actually matter — do not port everything to `__asm` speculatively.
+**Porting approach actually taken:** everything was ported to plain C, including the
+per-tick hot paths (`RegisterUpdate`, `WriteOneSID`, frequency table lookups) —
+profiling never showed a need for hand-written `__asm`, and turbo mode gives enough
+per-tick cycle budget once actually engaged (see `ARCHITECTURE.md`'s "Timing"
+discussion — the one real perf bug found in this project was turbo never being
+enabled after `detect_turbo()`'s benchmark reset it to 1 MHz, not anything C-vs-asm
+related). The only raw `__asm` in the whole player is the `hb_irq` trampoline itself
+(a real dispatch requirement, not a speed optimization) and a couple of
+inline-`__asm` reads (`hb_detect_ntsc`'s raster-timing probe).
 
 When porting any routine from `player.s`, add a credit comment per the global
 `~/.claude/CLAUDE.md` Code Attribution convention, e.g.:
