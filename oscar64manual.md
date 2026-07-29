@@ -1799,6 +1799,39 @@ Cross-check any offset arithmetic independently too (e.g. in a scratch Python/sh
 script) rather than trusting a from-source struct layout alone, since there's no
 compiler-enforced safety net here.
 
+### `-O2` optimizer can non-terminate on certain branch/clamp shapes ("Optimizer locked in infinite loop")
+
+Confirmed on a function with two structurally-identical "clamp to a bound + apply a
+follow-up side effect" blocks (a 16-bit value compared against a computed bound,
+clamped, and a small shared multi-line side-effect duplicated verbatim in both the
+top-clamp and bottom-clamp branches — e.g. a filter-cutoff modulation routine with a
+"clamp to ceiling" and "clamp to floor" branch, each recomputing the same
+bounce/negate byte). Oscar64's `-O2` peephole pass (`NativeCodeGenerator.cpp`'s
+per-function optimize loop, capped at `cnt>200` iterations) failed to reach a fixed
+point and emitted:
+```
+warning 2007: Optimizer locked in infinite loop 'function_name'
+```
+followed by repeated internal `Oops N` diagnostic lines (harmless — just the
+optimizer's own iteration-count printout, `cnt>190`). The build still completes and
+produces a `.prg`, but a non-converging optimizer pass on a function like this is not
+something to just ignore. Neither `__noinline` on the function nor restructuring the
+early-return control flow around a single reused local made the warning go away.
+
+**Fix that worked**: factor the *duplicated* side-effect code (the identical block
+appearing in both branches) out into its own small `static` helper function, called
+from both places instead of inlined twice. Once the duplication was removed, the
+warning disappeared completely and the function optimized normally. Isolating just
+this function in a tiny standalone `.c` file did **not** reproduce the warning —
+Oscar64 optimizes as one whole program, so the bug only showed up in the full build,
+not in a minimal repro; don't trust a clean isolated-file test as proof a shape like
+this is safe in-repo.
+
+**Takeaway**: if `-O2` warns "Optimizer locked in infinite loop" on a function with
+duplicated multi-statement logic across sibling branches, de-duplicate that logic
+into a helper first — don't reach for `__noinline` or manual control-flow rewrites as
+the first fix.
+
 ### Native-mode preprocessor and expression gotchas
 
 **`#if MACRO` vs `#ifdef MACRO` with `-d` defines**

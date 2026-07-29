@@ -84,9 +84,11 @@ INSTALL_PATH = idi8b/heartbeat-demo
 
 # Deployment target (FTP to Ultimate device)
 # Set your U64 IP in .env (see .env.example) — .env is gitignored
+# NOTE: /usb0/ stopped working on this device (mount failure, confirmed via
+#       ultimate_get_file_info 404); /sd/ is the working path instead.
 -include .env
 ULTHOST  ?= <YOUR_U64_IP>
-ULTPATH  = /usb0/$(INSTALL_PATH)/
+ULTPATH  = /sd/$(INSTALL_PATH)/
 ULTFTP   = ftp://$(ULTHOST)
 
 # Versioned release ZIP

@@ -2,12 +2,15 @@
 Heartbeat Soundtracker player — C/Oscar64 port, implementation
 See hbplayer.h for API documentation and NOTICE.md for attribution.
 
-Phases 1-7 done: data structures, song loader, NTSC detection, init/tempo/
+Phases 1-9 done: data structures, song loader, NTSC detection, init/tempo/
 stop-all, tick IRQ, pattern-row fetch, SID + UA note trigger with register
-flush (SID side simplified -- no PWM/filter/vibrato/arpeggio movement or
-track-command dispatch yet, see hb_play_sid_note()'s header comment; UA
-side is a full port of PlaySampleNote/StopSampleNote). Track commands
-(Phase 8) and full modulation (Phase 9) still outstanding -- see
+flush, Cmd8x_* track-command dispatch, and full per-tick modulation
+(vibrato/PWM/filter-sweep/wave-arp-table-stepping/portamento -- see
+hb_modulations()). hb_play_sid_note() still sets the note's INITIAL pitch/
+waveform directly at trigger time (matching PlaySIDNote); everything it
+sets is now continuously modulated every tick afterwards by
+hb_modulate_channel(), same as the original. PlayFX/StopFX + test harness
+(Phase 10) still outstanding -- see
 /home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md for phasing.
 ******************************************************************/
 
@@ -293,32 +296,35 @@ void hb_stop_all(void)
 // (Phases 6-7: SID/UA note trigger + shadow flush). Kept as static
 // internals, not part of the public API in hbplayer.h.
 static void hb_sid_hard_restart(void);
+static void hb_early_gate_on(void);
 static void hb_play_pattern_row(void);
 static void hb_register_update(void);
+static void hb_modulations(void);
 static void hb_ua_track_cmd(unsigned char ua_idx, unsigned char cmd_byte);
 static void hb_sid_track_cmd(unsigned char sid_idx, unsigned char ch_idx, unsigned char cmd_byte);
 static void hb_cmd_channel_cmd(unsigned char cmd_byte);
 
 // ---------------------------------------------------------------
-// hb_tick — port of PlayerUpdate (SID + UA; track commands are Phase 8,
-// live modulation -- vibrato/PWM/filter-sweep/wave-arp stepping,
-// portamento -- is Phase 9).
+// hb_tick — port of PlayerUpdate (SID + UA note trigger, Cmd8x_* track
+// commands, and full per-tick Modulations -- all phases complete).
 //
 // Mirrors the original's MusicPlayMode dispatch exactly:
-//   bit7 set ($80)      -> return immediately, skip even RegisterUpdate
-//                          (matches .alloff jumping past Modulations/
-//                          RegisterUpdate entirely)
-//   ==0 (idle/ended)    -> skip tick/row logic, but STILL flush registers
-//                          (matches .done -- envelope decay etc. must
-//                          keep running even after notes stop)
-//   otherwise (playing) -> full tick countdown + row-fetch/play dispatch,
-//                          then flush registers
+//   bit7 set ($80)      -> return immediately, skip even Modulations/
+//                          RegisterUpdate (matches .alloff)
+//   ==0 (idle/ended)    -> skip tick/row logic, but STILL run Modulations
+//                          and flush registers (matches .done -- envelope
+//                          decay, vibrato, filter sweep etc. must keep
+//                          running even after notes stop)
+//   otherwise (playing) -> tick countdown + row-fetch/hard-restart/
+//                          early-gate-on dispatch, then Modulations +
+//                          register flush
 //
 // __interrupt: Oscar64 auto-saves whatever ZP it statically determines
-// this function's call tree touches. Re-verified via -g build + .asm for
-// Phase 7's additions (see hb_irq's comment for the full gap-analysis
-// history) -- do NOT assume past results still hold once this body grows
-// again (Phase 8+).
+// this function's call tree touches. Re-verified via -g build + .asm after
+// Phase 9's additions (see hb_irq's comment for the full gap-analysis
+// history) -- do NOT assume past results still hold if this body grows
+// again (Phase 10 adds PlayFX/StopFX, which are NOT called from hb_tick's
+// own call tree, so shouldn't affect this -- but re-check anyway).
 // ---------------------------------------------------------------
 // Phase-4-only: free-running, never-clamped fire counter for hardware
 // verification (hb_state.tick itself starts small and hits 0 within
@@ -346,8 +352,13 @@ __interrupt void hb_tick(void)
             hb_fetch_pattern_row();
             hb_sid_hard_restart();
         }
+        else if (hb_state.tick == hb_songdata.hardrestart_gateon_time)
+        {
+            hb_early_gate_on();
+        }
     }
 
+    hb_modulations();
     hb_register_update();
 }
 
@@ -386,22 +397,32 @@ __interrupt void hb_tick(void)
 // oscar64manual.md), this is installed via `*((void**)0x0314) = hb_irq;`,
 // never called with hb_irq().
 //
-// ZERO-PAGE GAP (found 2026-07-29, Phase 6): hb_tick's call tree grew to
-// include hb_play_sid_note(), whose `note << 6` frequency-scaling compiles
-// to a call to Oscar64's mul16by8 runtime routine (rather than unrolled
-// shifts). Verified via -g build + .asm inspection that mul16by8 uses
-// zero-page $02 as scratch, in addition to ACCU+0/1 ($1B/$1C) -- and that
-// $02 is NOT among the ZP locations Oscar64's __interrupt prologue for
-// hb_tick auto-saves (confirmed it saves WORK+0..3, P0-P2, ACCU+0..3, and
-// several T-series temporaries, but not $02). A full sweep of every JSR
-// target reachable from hb_tick (hb_check_sid_mute, hb_play_sid_note,
-// hb_fetch_pattern_row, hb_sid_hard_restart, hb_register_update_sid, and
-// their own callees) found only two runtime helpers in total: divmod
-// (WORK+0..3/ACCU+0..1, already covered) and mul16by8 ($02, NOT covered).
+// ZERO-PAGE GAP (found 2026-07-29, Phase 6; re-verified after Phase 9):
+// hb_tick's call tree grew to include hb_play_sid_note(), whose `note << 6`
+// frequency-scaling compiles to a call to Oscar64's mul16by8 runtime
+// routine (rather than unrolled shifts). Verified via -g build + .asm
+// inspection that mul16by8 uses zero-page $02 as scratch, in addition to
+// ACCU+0/1 ($1B/$1C) -- and that $02 is NOT among the ZP locations
+// Oscar64's __interrupt prologue for hb_tick auto-saves (as of Phase 9,
+// this prologue saves WORK+0..3, P0-P10, ACCU+0..3, T0-T3, and $4D-$51 --
+// but never $02).
+//
+// RE-SWEPT after Phase 9 (Modulations + hb_early_gate_on roughly tripled
+// hb_tick's call tree -- hb_modulations/hb_modulate_sid_filter/
+// hb_modulate_channel/hb_modulate_portamento/hb_cutoff_bounce_step/
+// hb_early_gate_on are all new). Full JSR sweep of every function
+// transitively reachable from hb_tick found exactly two runtime helpers:
+// divmod (WORK+0..3/ACCU+0..1, already auto-saved) and mul16by8 ($02,
+// still NOT auto-saved -- same gap as Phase 6, no new one introduced). A
+// direct scan of the new Phase 9 functions' own disassembly for
+// unnamed/raw zero-page addressing (as opposed to the named ACCU/WORK/P/T
+// registers) found none -- they only ever touch zero page via those
+// already-covered registers.
+//
 // Manually saved/restored here around the hb_tick call, following the
 // same method as modplay_irq's documented gap analysis in
 // UltimateDemo2026/include/modplay.c. Re-run this same sweep whenever
-// hb_tick's call tree changes (Phase 7+ will add more).
+// hb_tick's call tree changes again (Phase 10).
 // ---------------------------------------------------------------
 __asm hb_irq
 {
@@ -663,26 +684,84 @@ static void hb_sid_hard_restart(void)
 }
 
 // ---------------------------------------------------------------
-// hb_play_sid_note — SIMPLIFIED port of PlaySIDNote (Phase 6 scope).
+// hb_early_gate_on — port of EarlyGateOn, called at
+// tick==hardrestart_gateon_time ("last tick 1-2 of hard restart"), a beat
+// after hb_sid_hard_restart's silencing -- pre-arms the envelope and
+// key-up mask ahead of the real note trigger so the gate's low->high
+// transition on the actual note-on doesn't click. Uses the exact same
+// note-validity checks as hb_sid_hard_restart (same row-buffer layout),
+// but reads the CURRENT row's about-to-play instrument's ADSR directly
+// (not a fixed silence template) and sets a fixed waveform byte from the
+// song data (hardrestart_gateon_wave) rather than clearing it.
 //
-// Sets up envelope, gate, finetune, portamento speed/target-reached, and
-// wave/arp-table-stepping state (step/count/speed reset so Phase 9 starts
-// clean), plus an IMMEDIATE frequency conversion (base note + finetune ->
-// hb_get_sid_freq), used directly as the active SID frequency register.
+// NOTE: this function existed as a source-level requirement since Phase 5
+// (hb_songdata already has hardrestart_gateon_time/hardrestart_gateon_wave)
+// but was never wired up until Phase 9 -- a real gap in earlier phases,
+// closed here alongside Modulations since both affect per-tick SID
+// register state.
+// ---------------------------------------------------------------
+static void hb_early_gate_on(void)
+{
+    unsigned char sid_idx, ch_idx;
+
+    for (sid_idx = 0; sid_idx < HB_MAX_SIDS; sid_idx++)
+    {
+        if (hb_check_sid_mute(sid_idx))
+            continue;
+
+        for (ch_idx = 0; ch_idx < 3; ch_idx++)
+        {
+            unsigned char off = (unsigned char)(14 + sid_idx * 6 + ch_idx * 2);
+            unsigned char note = hb_row_buf[off];
+            unsigned char sample_num = hb_row_buf[off + 1];
+            hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+
+            if (note == 0)       continue; // no note
+            if (note & 0x80)      continue; // effect/command, not a note
+            if (note == 1)        continue; // stop note
+            if (sample_num == 0)  continue; // tied note, no early gate-on
+
+            {
+                hb_inst_params_t *inst = &hb_songdata.inst_params[sample_num - 1];
+                c->sid_env_ad = inst->env_ad;
+                c->sid_env_sr = inst->env_sr;
+            }
+
+            c->sid_wave = hb_songdata.hardrestart_gateon_wave;
+            c->gate_mask = 0xFF; // gate up in key-up mask
+        }
+    }
+}
+
+// Filter-select bit masks for SIDFiltCtrl's low nibble (bit0/1/2 = enable
+// filter on SID channel 0/1/2). Ported literally from ChannelAND/ChannelORA
+// (player.s ~2759-2769), indexed directly by ch_idx (0-2) here since this
+// port already has a real channel index -- the original's contrived
+// "X&0x1F, lsr, lsr -> table index 0,1,3" exists only because X there is a
+// 32-byte-strided chip/channel parameter offset, not a plain 0-2 index.
+// NOTE: the AND (disable) table is intentionally asymmetric in the
+// original -- channel 2's entry (0xF9) clears BOTH bits 1 and 2, not just
+// bit 2, unlike the ORA (enable) table's clean single-bit-per-channel
+// mapping. Ported as-is, not "fixed", per this project's bit-exactness goal.
+static const unsigned char hb_channel_and[3] = { 0xFE, 0xFD, 0xF9 };
+static const unsigned char hb_channel_ora[3] = { 0x01, 0x02, 0x04 };
+
+// ---------------------------------------------------------------
+// hb_play_sid_note — full port of PlaySIDNote.
 //
-// Deliberate simplifications (deferred to Phase 9, which doesn't exist
-// yet): the original recomputes SIDFreq every TICK in ModulateChannel
-// (base + arpeggio + vibrato + finetune) and steps through the wave/arp
-// table each tick too -- here the note plays at a fixed pitch (base +
-// finetune only) with a fixed waveform (table step 0) and no vibrato/
-// arpeggio movement. PWM and filter setup are also explicit Phase 6
-// non-goals (deferred to Phase 9 along with their modulation) -- those
-// fields stay at whatever hb_init_sid_image_and_volumes() zeroed them to,
-// meaning no PWM sweep and no filter for now.
+// Sets up envelope, gate, finetune, portamento speed/target-reached,
+// PWM/vibrato/filter parameters, and wave/arp-table-stepping state
+// (step=0xFF/count=1 so hb_modulate_channel reads real step 0 on the very
+// next Modulations pass -- which happens later in this SAME tick, since
+// hb_tick calls hb_play_pattern_row() before hb_modulations()). Does NOT
+// itself compute SIDFreq or the initial waveform -- matches the original,
+// which leaves both to ModulateChannel's first pass after trigger, not
+// PlaySIDNote itself.
 // ---------------------------------------------------------------
 static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsigned char note)
 {
-    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+    hb_sid_chip_t *chip = &hb_sids[sid_idx];
+    hb_sid_channel_t *c = &chip->ch[ch_idx];
     unsigned char off = (unsigned char)(14 + sid_idx * 6 + ch_idx * 2);
     unsigned char sample_num = hb_row_buf[off + 1];
     unsigned linear = ((unsigned)note) << 6; // BaseFreq/H = note*64 (two lsr/ror pairs in the original)
@@ -704,8 +783,6 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
     {
         hb_inst_params_t *inst = &hb_songdata.inst_params[sample_num - 1];
         signed char ft = (signed char)inst->finetune;
-        unsigned withfinetune, freq;
-        unsigned char w;
 
         c->instr_lo = (unsigned char)(sample_num - 1); // index, not a real pointer (see hbplayer.h)
         c->instr_hi = 1;                                // nonzero = instrument active
@@ -718,33 +795,101 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
 
         c->portamento = inst->portamento;
 
+        // ---- PWM start/rate/top/bottom ($14-$16) ----
+        // pwm_start==0 means "don't reset the pulse-width register" --
+        // keep whichever direction/value PWM is already sweeping in
+        // (free-running), only updating the rate; if the current sweep
+        // direction is downward (pwm_rate_hi != 0), the new rate from this
+        // instrument is negated to match that direction instead of
+        // resetting it upward.
+        if (inst->pwm_start != 0)
+        {
+            unsigned pw16 = 0x8000u | ((unsigned)inst->pwm_start << 4);
+            c->sid_pw_lo = (unsigned char)pw16;
+            c->sid_pw_hi = (unsigned char)(pw16 >> 8);
+            c->pwm_rate = inst->pwm_rate;
+            c->pwm_rate_hi = 0x00;
+        }
+        else if (c->pwm_rate_hi == 0)
+        {
+            c->pwm_rate = inst->pwm_rate;
+            c->pwm_rate_hi = 0x00;
+        }
+        else
+        {
+            c->pwm_rate = (unsigned char)(0 - inst->pwm_rate);
+            c->pwm_rate_hi = 0xFF;
+        }
+        c->pwm_bottom_hi = (unsigned char)((inst->pwm_topbottom & 0x0F) | 0x80);
+        c->pwm_top_hi    = (unsigned char)((inst->pwm_topbottom >> 4) | 0x80);
+
+        // ---- Vibrato delay/width/rate ($17-$19) ----
+        c->vib_delay = inst->vib_delay;
+        c->vib_width = (unsigned char)(inst->vib_width >> 1);
+        {
+            unsigned vibrate16 = (unsigned)inst->vib_rate << 4;
+            c->vib_rate    = (unsigned char)vibrate16;
+            c->vib_rate_hi = (unsigned char)(vibrate16 >> 8);
+        }
+
+        // ---- Filter type/resonance/cutoff ($1A-$1F) -- chip-level ----
+        if (inst->filter_type == 0)
+        {
+            // No filter for THIS channel: just clear its enable bit(s),
+            // preserving the chip's resonance nibble and other channels'
+            // bits. cutoff_mod/top/bottom are deliberately left untouched
+            // -- they're chip-level and may still be driven by another
+            // channel on the same chip that DOES want filtering.
+            chip->filt_ctrl = (unsigned char)(chip->filt_ctrl & hb_channel_and[ch_idx]);
+        }
+        else
+        {
+            chip->volume = (unsigned char)((chip->volume & 0x0F) | ((inst->filter_type & 0x0F) << 4));
+            chip->cutoff_bounce = (inst->filter_type & 0x10) ? 0x80 : 0x00;
+
+            chip->filt_ctrl = (unsigned char)(((chip->filt_ctrl | hb_channel_ora[ch_idx]) & 0x0F)
+                                               | ((inst->filter_resonance & 0x0F) << 4));
+
+            if (inst->cutoff_init != 0)
+            {
+                unsigned cutoff16 = 0x8000u | ((unsigned)inst->cutoff_init << 5);
+                chip->filter_lo = (unsigned char)cutoff16;
+                chip->filter_hi = (unsigned char)(cutoff16 >> 8);
+                chip->cutoff_mod = inst->cutoff_mod;
+            }
+            else
+            {
+                // No cutoff init: keep the CURRENT direction -- if this
+                // instrument's mod rate would reverse it, invert the rate
+                // instead of the direction (matches the original's
+                // "invertmod"/"normalmod" branch pair exactly).
+                signed char new_mod = (signed char)inst->cutoff_mod;
+                signed char cur_mod = (signed char)chip->cutoff_mod;
+                char same_dir = (new_mod < 0) ? (cur_mod < 0) : (cur_mod >= 0);
+                chip->cutoff_mod = same_dir ? inst->cutoff_mod : (unsigned char)(0 - inst->cutoff_mod);
+            }
+
+            {
+                unsigned top16 = 0x8000u | ((unsigned)inst->cutoff_top << 5);
+                chip->cutoff_top_lo = (unsigned char)top16;
+                chip->cutoff_top_hi = (unsigned char)(top16 >> 8);
+                unsigned bottom16 = 0x8000u | ((unsigned)inst->cutoff_bottom << 5);
+                chip->cutoff_bottom_lo = (unsigned char)bottom16;
+                chip->cutoff_bottom_hi = (unsigned char)(bottom16 >> 8);
+            }
+        }
+
         c->vib_phase = 0;
         c->vib_frac = 0;
         c->target_freq_hi = 0xFF; // portamento target reached (nothing pending)
 
         c->wave_arp_speed = 4;
         c->wave_arp_count = 1;
-        c->wave_arp_step = 0;
-        c->gate_mask = 0xFF; // gate from wave table
-
-        // Phase 6 simplification: static waveform from the wave table's
-        // step 0 (Phase 9 steps through this table every tick). Fall back
-        // to triangle+gate if step 0 is a command byte ($FC-$FF) or empty.
-        w = inst->wave_table[0];
-        if (w == 0 || w >= 0xFC)
-            w = 0x10;
-        c->sid_wave = (unsigned char)(w & c->gate_mask);
+        c->wave_arp_step = 0xFF; // wraps to step 0 on the first increment (in hb_modulate_channel)
+        c->gate_mask = 0xFF;     // gate from wave table
 
         c->base_freq_lo = (unsigned char)linear;
         c->base_freq_hi = (unsigned char)(linear >> 8);
-
-        // Phase 6 simplification: convert base+finetune directly to the
-        // active SID frequency register now, instead of every tick via
-        // ModulateChannel (no arpeggio/vibrato applied yet -- Phase 9).
-        withfinetune = (unsigned)(linear + (((unsigned)(unsigned char)c->finetune) | ((unsigned)c->finetune_hi << 8)));
-        freq = hb_get_sid_freq((unsigned char)(withfinetune >> 8), (unsigned char)withfinetune);
-        c->sid_freq_lo = (unsigned char)freq;
-        c->sid_freq_hi = (unsigned char)(freq >> 8);
     }
 }
 
@@ -1407,4 +1552,333 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte)
     case 0x0A: hb_cmd_xt_cmd(param); break;
     default: break; // Pa/Fi/Co/Po/Vo ignored on Cmd channel
     }
+}
+
+// =================================================================
+// Phase 9: Modulations (vibrato/PWM/filter-sweep/wave-arp stepping,
+// portamento) -- port of Modulations/ModulateSIDandUA/ModulateChannel
+// (player.s lines 1547-2013).
+//
+// Structural deviation from the source (verified behaviorally identical):
+// the original interleaves SID-filter-modulation and UA-channel-portamento
+// into a single shared loop (both are indexed with the same 32-byte stride,
+// and there happen to be 7 UA channels and 8 SID chips, so one shared `x`
+// loop variable drives both, with the 8th iteration skipping the UA half
+// via a `cpx #$e0` check). That's a code-size trick, not a dependency --
+// SID filter state and UA channel state never interact, and the actual
+// hardware flush (RegisterUpdate) happens as a separate step afterwards --
+// so this port uses two plain, independent loops instead for clarity.
+// =================================================================
+
+// ---------------------------------------------------------------
+// hb_modulate_portamento — shared 16-bit slide-towards-target step, used
+// for both the UA sample-rate frequency slide (ModulateSIDandUA's tail)
+// and the SID base-frequency slide (ModulateChannel's portamento block) --
+// identical arithmetic in the source for both, just different register
+// names/widths.
+//
+// VERIFIED ASYMMETRY (traced branch-by-branch from the source, not a bug):
+// sliding UP treats "new value == target" as arrived; sliding DOWN does
+// NOT -- an exact landing during a down-slide is instead caught by the
+// up-front equality check on the *next* tick. This costs at most one extra
+// tick with the portamento-active flag still set (the register value
+// itself is already correct), and is reproduced here exactly rather than
+// "cleaned up".
+// ---------------------------------------------------------------
+static void hb_modulate_portamento(unsigned char *freq_lo, unsigned char *freq_hi,
+                                    unsigned char *target_lo, unsigned char *target_hi,
+                                    unsigned char rate)
+{
+    unsigned cur, target;
+
+    if ((signed char)*target_hi < 0)
+        return; // negative target_hi = portamento not active
+
+    cur    = ((unsigned)*freq_hi << 8)   | *freq_lo;
+    target = ((unsigned)*target_hi << 8) | *target_lo;
+
+    if (cur == target)
+    {
+        *target_hi = 0xFF; // already there -- disable
+        return;
+    }
+
+    if (target < cur)
+    {
+        cur = (unsigned)(cur - rate);
+        if (cur < target)          // strictly-less: source's slidedown arrival test
+        {
+            cur = target;
+            *target_hi = 0xFF;
+        }
+    }
+    else
+    {
+        cur = (unsigned)(cur + rate);
+        if (cur >= target)         // >=: source's slideup arrival test (includes equality)
+        {
+            cur = target;
+            *target_hi = 0xFF;
+        }
+    }
+
+    *freq_lo = (unsigned char)cur;
+    *freq_hi = (unsigned char)(cur >> 8);
+}
+
+// ---------------------------------------------------------------
+// hb_cutoff_bounce_step — CutoffBounce's bit7 selects "stop at the wall"
+// vs "bounce off it"; ported literally (not as a clean negate) since the
+// source's own "negate rate" comment is only accurate when CutoffBounce's
+// low 7 bits are 0 -- the literal `(bounce<<1) [- mod]` form is exact
+// regardless of that assumption. Factored out of hb_modulate_sid_filter
+// (used identically at both the top and bottom clamp) as part of working
+// around an Oscar64 -O2 optimizer non-termination warning ("Optimizer
+// locked in infinite loop") seen when this logic was inlined twice in a
+// function with this shape -- see oscar64manual.md.
+// ---------------------------------------------------------------
+static unsigned char hb_cutoff_bounce_step(unsigned char bounce, unsigned char mod)
+{
+    unsigned char shifted = (unsigned char)(bounce << 1);
+    return (bounce & 0x80) ? shifted : (unsigned char)(shifted - mod);
+}
+
+// ---------------------------------------------------------------
+// hb_modulate_sid_filter — port of ModulateSIDandUA's filter-cutoff half.
+// ---------------------------------------------------------------
+static void hb_modulate_sid_filter(hb_sid_chip_t *chip)
+{
+    unsigned cur, top, bottom;
+
+    if (chip->cutoff_mod == 0)
+        return;
+
+    cur = (unsigned)((((unsigned)chip->filter_hi << 8) | chip->filter_lo)
+                      + (unsigned)(signed char)chip->cutoff_mod);
+
+    top    = ((unsigned)chip->cutoff_top_hi << 8)    | chip->cutoff_top_lo;
+    bottom = ((unsigned)chip->cutoff_bottom_hi << 8) | chip->cutoff_bottom_lo;
+
+    if (cur >= top)
+    {
+        chip->cutoff_mod = hb_cutoff_bounce_step(chip->cutoff_bounce, chip->cutoff_mod);
+        cur = top;
+        chip->filter_lo = (unsigned char)top;
+        chip->filter_hi = (unsigned char)(top >> 8);
+
+        // Source: "bne .filterdone" -- only falls through to the bottom
+        // check when the top bound's hi byte is 0 (never true for real
+        // filter cutoff data, which lives in the $8000-$9FFF range; kept
+        // for exact fidelity anyway).
+        if (chip->cutoff_top_hi != 0)
+            return;
+    }
+    else
+    {
+        chip->filter_lo = (unsigned char)cur;
+        chip->filter_hi = (unsigned char)(cur >> 8);
+    }
+
+    if (cur < bottom)
+    {
+        chip->cutoff_mod = hb_cutoff_bounce_step(chip->cutoff_bounce, chip->cutoff_mod);
+        chip->filter_lo = (unsigned char)bottom;
+        chip->filter_hi = (unsigned char)(bottom >> 8);
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_modulate_ua_channel — port of ModulateSIDandUA's UA-portamento half.
+// Unlike hb_play_sample_note, the rate register here is recomputed and
+// rewritten to hardware every tick, unconditionally (matches the source --
+// .portadone is the fallthrough for every path, not just the active-slide
+// ones), reusing audio_channel_set_rate for the actual hardware write
+// (same register-order convention already proven in Phase 7).
+// ---------------------------------------------------------------
+static void hb_modulate_ua_channel(unsigned char ua_idx)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    unsigned withfinetune, rate;
+
+    hb_modulate_portamento(&c->freq_lo, &c->freq_hi,
+                            &c->target_freq_lo, &c->target_freq_hi,
+                            c->portamento);
+
+    withfinetune = (unsigned)((((unsigned)c->freq_hi << 8) | c->freq_lo)
+                             + (((unsigned)c->finetune_hi << 8) | c->finetune_lo));
+
+    rate = hb_get_ultimate_freq((unsigned char)(withfinetune >> 8), (unsigned char)withfinetune);
+    audio_channel_set_rate(ua_idx, rate);
+}
+
+// ---------------------------------------------------------------
+// hb_modulate_channel — port of ModulateChannel: wave/arp table stepping,
+// PWM sweep, SID base-frequency portamento, vibrato, and the final
+// arpeggio+vibrato+finetune -> SID frequency register calculation. Runs
+// unconditionally every tick for every SID channel (matches the source --
+// there's no "is this channel playing" gate here; silent channels just
+// modulate silently until their next note-trigger overwrites the state).
+// ---------------------------------------------------------------
+static void hb_modulate_channel(unsigned char sid_idx, unsigned char ch_idx)
+{
+    hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
+
+    // ---- wave/arp table stepping ----
+    if (c->wave_arp_count != 0 && c->instr_hi != 0)
+    {
+        if (--c->wave_arp_count == 0)
+        {
+            hb_inst_params_t *inst = &hb_songdata.inst_params[c->instr_lo];
+            unsigned char idx, w;
+
+            for (;;)
+            {
+                c->wave_arp_step++;                     // free-running counter (inc WaveArpStep,x)
+                c->wave_arp_count = c->wave_arp_speed;   // reset step timer
+
+                idx = (unsigned char)(c->wave_arp_step & 0x0F);
+                w = inst->wave_table[idx];
+
+                if (w == 0) { c->wave_arp_count = 0; break; } // end of table
+
+                if (w == 0xFF) // loop command -> jump to the step named in the arp table
+                {
+                    idx = (unsigned char)(inst->arp_table[idx] & 0x0F);
+                    c->wave_arp_step = idx; // loop target overwrites the free-running counter
+                    w = inst->wave_table[idx];
+                    if (w == 0) { c->wave_arp_count = 0; break; }
+                    // The resolved value is NOT re-checked for a second $FF
+                    // here -- matches the source exactly; a loop-to-loop is
+                    // instead caught by the w==0xFF check just below.
+                }
+
+                if (w == 0xFC) { c->sid_env_ad     = inst->arp_table[idx]; continue; }
+                if (w == 0xFD) { c->sid_env_sr     = inst->arp_table[idx]; continue; }
+                if (w == 0xFE) { c->wave_arp_speed = inst->arp_table[idx]; continue; }
+                if (w == 0xFF) break; // loop-to-loop guard: treat as end-of-table
+
+                c->sid_wave = w;
+                c->current_arp = inst->arp_table[idx];
+                break;
+            }
+        }
+    }
+
+    // ---- pulse width modulation ----
+    {
+        unsigned rate = ((unsigned)c->pwm_rate_hi << 8) | c->pwm_rate;
+        if (rate != 0)
+        {
+            unsigned pw     = ((unsigned)c->sid_pw_hi << 8) | c->sid_pw_lo;
+            unsigned top    = ((unsigned)c->pwm_top_hi << 8) | 0xFF; // low bound byte is always $FF (source: "cmp #$ff")
+            unsigned bottom = ((unsigned)c->pwm_bottom_hi << 8);     // low bound byte is always $00
+
+            pw = (unsigned)(pw + rate);
+            c->sid_pw_lo = (unsigned char)pw;
+            c->sid_pw_hi = (unsigned char)(pw >> 8);
+
+            if (pw >= top)
+            {
+                unsigned neg = (unsigned)(0 - rate);
+                c->pwm_rate    = (unsigned char)neg;
+                c->pwm_rate_hi = (unsigned char)(neg >> 8);
+                c->sid_pw_hi = (unsigned char)(top >> 8);
+                c->sid_pw_lo = 0xFF;
+            }
+            else if (pw < bottom)
+            {
+                unsigned neg = (unsigned)(0 - rate);
+                c->pwm_rate    = (unsigned char)neg;
+                c->pwm_rate_hi = (unsigned char)(neg >> 8);
+                c->sid_pw_hi = (unsigned char)(bottom >> 8);
+                c->sid_pw_lo = 0x00;
+            }
+        }
+    }
+
+    // ---- SID base-frequency portamento ----
+    hb_modulate_portamento(&c->base_freq_lo, &c->base_freq_hi,
+                            &c->target_freq_lo, &c->target_freq_hi,
+                            c->portamento);
+
+    // ---- vibrato ----
+    {
+        unsigned char run_this_tick;
+
+        if (c->vib_delay == 0)
+            run_this_tick = 1;
+        else
+        {
+            c->vib_delay--;
+            run_this_tick = (c->vib_delay == 0);
+        }
+
+        if (run_this_tick)
+        {
+            unsigned sum;
+            unsigned char abs_phase;
+
+            sum = (unsigned)c->vib_frac + c->vib_rate;
+            c->vib_frac = (unsigned char)sum;
+            c->vib_phase = (unsigned char)(c->vib_phase + c->vib_rate_hi + (unsigned char)(sum >> 8));
+
+            abs_phase = (c->vib_phase & 0x80) ? (unsigned char)(~c->vib_phase + 1) : c->vib_phase;
+
+            if (abs_phase >= c->vib_width)
+            {
+                unsigned neg = (unsigned)(0 - (((unsigned)c->vib_rate_hi << 8) | c->vib_rate));
+                c->vib_rate    = (unsigned char)neg;
+                c->vib_rate_hi = (unsigned char)(neg >> 8);
+
+                // bounce back: apply the now-reversed rate once more, same tick
+                sum = (unsigned)c->vib_frac + c->vib_rate;
+                c->vib_frac = (unsigned char)sum;
+                c->vib_phase = (unsigned char)(c->vib_phase + c->vib_rate_hi + (unsigned char)(sum >> 8));
+            }
+        }
+    }
+
+    // ---- arpeggio + vibrato + finetune -> final SID frequency register ----
+    {
+        unsigned char arp = c->current_arp;
+        unsigned char absolute = (arp & 0x80) != 0;
+        unsigned temp = ((unsigned)(arp & 0x7F)) << 6; // arp note * 64, same fixed-point unit as base_freq
+
+        if (!absolute)
+        {
+            unsigned base = ((unsigned)c->base_freq_hi << 8) | c->base_freq_lo;
+            unsigned vib  = (unsigned)(signed char)c->vib_phase; // sign-extended 16-bit add
+            unsigned ft   = ((unsigned)c->finetune_hi << 8) | c->finetune;
+
+            temp = (unsigned)(temp + base + vib + ft);
+        }
+
+        {
+            unsigned freq = hb_get_sid_freq((unsigned char)(temp >> 8), (unsigned char)temp);
+            c->sid_freq_lo = (unsigned char)freq;
+            c->sid_freq_hi = (unsigned char)(freq >> 8);
+        }
+
+        c->sid_wave = (unsigned char)(c->sid_wave & c->gate_mask); // key-up gate mask, re-applied every tick
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_modulations — port of Modulations's top-level dispatch loop. See the
+// Phase 9 header comment above for why this is two plain loops instead of
+// the source's one shared-index loop.
+// ---------------------------------------------------------------
+static void hb_modulations(void)
+{
+    unsigned char sid_idx, ua_idx, ch_idx;
+
+    for (sid_idx = 0; sid_idx < HB_MAX_SIDS; sid_idx++)
+    {
+        hb_modulate_sid_filter(&hb_sids[sid_idx]);
+        for (ch_idx = 0; ch_idx < 3; ch_idx++)
+            hb_modulate_channel(sid_idx, ch_idx);
+    }
+
+    for (ua_idx = 0; ua_idx < HB_UA_CHANNELS; ua_idx++)
+        hb_modulate_ua_channel(ua_idx);
 }

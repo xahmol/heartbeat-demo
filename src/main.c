@@ -245,6 +245,22 @@ int main(void)
         // Temporary -- condensed once Phase 4's IRQ makes this audible.
         if (song_loaded)
         {
+            // Engage turbo before playback starts. detect_turbo() (above)
+            // calls turbo_detect(), which explicitly RESTORES $D031 to
+            // 1 MHz after measuring (see turbo.h) -- so without this call,
+            // hb_tick would run at 1 MHz regardless of firmware settings.
+            // hb_tick's per-tick budget is fixed in REAL time by the CIA1
+            // Timer A period (~5.08 ms @ PAL, independent of CPU speed);
+            // Phase 9's full Modulations pass (24 SID channels + 7 UA
+            // channels, every tick) does not reliably fit in the ~5000 CPU
+            // cycles that period gives at 1 MHz, causing dropped/coalesced
+            // ticks -- audible as playback running far slower than the
+            // song's real tempo. Matches the reference player's own
+            // main.s, which boots directly at 16 MHz turbo for the same
+            // reason (real-time REU streaming + modulation headroom).
+            if (detected_turbo_class != TURBO_NOT_PRESENT)
+                turbo_fast();
+
             hb_detect_ntsc();
             hb_init(0, 1);
 
