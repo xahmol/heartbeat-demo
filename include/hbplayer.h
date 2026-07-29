@@ -219,6 +219,10 @@ void hb_stop_fx(unsigned char ch);
 
 extern hb_songdata_t hb_songdata;
 
+// Phase-4-only debug counter -- see hbplayer.c's hb_tick(). Remove once
+// Phase 5 lands.
+extern unsigned int hb_debug_tick_count;
+
 #pragma compile("hbplayer.c")
 
 #endif

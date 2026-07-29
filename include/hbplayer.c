@@ -286,12 +286,90 @@ void hb_stop_all(void)
 }
 
 // ---------------------------------------------------------------
-// hb_init — port of PlayerInit's state-setting body. Does NOT yet install
-// the tick IRQ / enable CIA1 Timer A or raster IRQ (that's Phase 4) --
-// call hb_detect_ntsc() before this.
+// hb_tick — port of PlayerUpdate. PHASE 4: no-op stub (just decrements
+// Tick) so the IRQ trampoline/vector plumbing can be verified in
+// isolation before the real per-row logic (row fetch, modulations,
+// register flush) lands in Phases 5-9.
+//
+// __interrupt: Oscar64 auto-saves whatever ZP it statically determines
+// this function's call tree touches. Re-verify via -g build + .asm
+// whenever this body grows -- do NOT assume the trampoline's manual
+// save requirements (currently none) still hold once this stops being
+// a trivial leaf function. See modplay.c's hb_irq-equivalent
+// (modplay_irq) for the full methodology this must be re-run with.
+// ---------------------------------------------------------------
+// Phase-4-only: free-running, never-clamped fire counter for hardware
+// verification (hb_state.tick itself starts small and hits 0 within
+// milliseconds -- not usable to prove "still firing" over human-visible
+// time). Remove once Phase 5's real per-row logic makes this moot.
+unsigned int hb_debug_tick_count;
+
+__interrupt void hb_tick(void)
+{
+    hb_debug_tick_count++;
+
+    if (hb_state.tick > 0)
+        hb_state.tick--;
+}
+
+// ---------------------------------------------------------------
+// hb_irq — port of PlayerIRQ. Raw __asm entry point (no C prologue),
+// installed at $0314/$0315 by hb_init(). Mirrors the reference exactly:
+// checks $D019 bit0 first to tell a VIC raster IRQ apart from the CIA1
+// Timer A IRQ that actually drives the player tick.
+//
+// The reference enables BOTH a raster IRQ (fixed line, independent of
+// tempo) and the CIA1 Timer A IRQ (tempo-dependent tick rate) at the same
+// time: the raster IRQ's only job is guaranteed ~50Hz keyboard scanning
+// (SCNKEY) regardless of how slow the current BPM's tick rate is, while
+// the CIA branch runs the real player update and deliberately skips
+// SCNKEY (it would double-scan against the raster IRQ). Both chain to
+// $EA81 -- a KERNAL entry point *past* its own internal SCNKEY call,
+// chosen specifically because both branches here already do their own
+// keyboard handling (or deliberately skip it) before reaching it.
+//
+// Per the "named asm blocks are addresses, not callables" rule (see
+// oscar64manual.md), this is installed via `*((void**)0x0314) = hb_irq;`,
+// never called with hb_irq().
+// ---------------------------------------------------------------
+__asm hb_irq
+{
+    lda $d019
+    and #$01
+    bne hb_irq_raster
+
+    jsr hb_tick
+    lda $dc0d           // read CIA1 ICR -- acknowledges Timer A IRQ (clear-on-read)
+    jmp $ea81
+
+hb_irq_raster:
+    sta $d019           // acknowledge raster IRQ
+    jsr $ff9f            // SCNKEY
+    jmp $ea81
+}
+
+// ---------------------------------------------------------------
+// hb_init — port of PlayerInit. Installs the tick IRQ (Phase 4) and
+// resets player state. Call hb_detect_ntsc() before this.
 // ---------------------------------------------------------------
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 {
+    __asm { sei }
+
+    *((void **)0x0314) = hb_irq;
+
+    *((volatile unsigned char *)0xD01A) = 0x01;   // enable VIC raster IRQ
+    *((volatile unsigned char *)0xD019) = 0x01;   // ack any pending raster IRQ
+    cia1.cra = 0x01;                               // start CIA1 Timer A (continuous)
+    cia1.icr = 0x81;                               // enable CIA1 Timer A IRQ
+
+    // Raster compare line 0: $D011=$1B is the standard VIC text-mode
+    // control byte (RSEL/DEN/YSCROLL) with bit7 (raster-line MSB) = 0;
+    // $D012=$00 gives the low 8 bits -> line (0<<8)|0 = 0. (NOT "line 27" --
+    // $1B is a control-register value here, not a raw line number.)
+    *((volatile unsigned char *)0xD011) = 0x1B;
+    *((volatile unsigned char *)0xD012) = 0x00;
+
     hb_init_ua_and_sids();
 
     hb_set_tempo(hb_songdata.starting_tempo);
@@ -312,4 +390,6 @@ void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
     hb_state.seq_step = (unsigned char)(seq_start_pos - 1);
 
     hb_state.play_mode = play_mode;
+
+    __asm { cli }
 }

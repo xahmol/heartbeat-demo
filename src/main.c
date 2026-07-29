@@ -254,6 +254,20 @@ int main(void)
             sprintf(buf, "patlen:%u  tick:%u  step:%u",
                     hb_state.patt_length, hb_state.tick, hb_state.seq_step);
             screen_info(buf);
+
+            // ---- Phase 4: IRQ trampoline/vector verification ------
+            // hb_state.tick itself hits 0 within milliseconds (not
+            // human-observable), so use the free-running debug counter
+            // instead: if it grows across a ~10-frame wait, hb_irq/hb_tick
+            // are genuinely firing via the installed $0314 vector.
+            {
+                unsigned int before = hb_debug_tick_count;
+                unsigned char f;
+                for (f = 0; f < 10; f++)
+                    vic_waitFrame();
+                sprintf(buf, "irq fires: %u -> %u", before, hb_debug_tick_count);
+                screen_info(buf);
+            }
         }
     }
 
