@@ -45,6 +45,26 @@ static char hb_song_file[] = "Knight Rider Theme.reu";
 // Helpers
 // ---------------------------------------------------------------
 
+// ---------------------------------------------------------------
+// hb_test_getin — raw KERNAL GETIN ($FFE4), non-blocking (returns 0 if the
+// keyboard buffer is empty). Bypasses conio.h's getchx() deliberately:
+// getchx() runs its result through convch()'s IOCharMap conversion, which
+// this file's petscii.h include would otherwise have to fight (as already
+// seen with the UCI path's #pragma charmap workarounds) -- comparing a raw
+// GETIN byte against explicit hex constants sidesteps that entirely.
+// Result stored to a file-scope static, not returned directly, per the
+// documented Oscar64 gotcha that an inline __asm block's store to a local
+// C variable is silently discarded (see oscar64manual.md).
+// ---------------------------------------------------------------
+static unsigned char hb_test_key;
+static void hb_test_getin(void)
+{
+    __asm {
+        jsr $ffe4
+        sta hb_test_key
+    }
+}
+
 static void fmt_dec(char *buf, unsigned char val)
 {
     char i = 0;
@@ -238,11 +258,7 @@ int main(void)
             screen_hint("Place .reu in idi8b/heartbeat-demo/");
         }
 
-        // ---- Heartbeat player: Phase 3 init/tempo debug check ----
-        // Verifies hb_detect_ntsc/hb_init/hb_set_tempo against an
-        // independent cross-check of bpmtable.bin's actual bytes at the
-        // loaded song's tempo index (done offline, not on-screen).
-        // Temporary -- condensed once Phase 4's IRQ makes this audible.
+        // ---- Start playback (Phases 3-9, all hardware-verified) --------
         if (song_loaded)
         {
             // Engage turbo before playback starts. detect_turbo() (above)
@@ -264,47 +280,39 @@ int main(void)
             hb_detect_ntsc();
             hb_init(0, 1);
 
-            sprintf(buf, "ntsc:%u  ticks:%u  cia:%04x",
-                    hb_state.ntsc_detected, hb_state.tempo_ticks, cia1.ta);
-            screen_info(buf);
-            sprintf(buf, "patlen:%u  tick:%u  step:%u",
-                    hb_state.patt_length, hb_state.tick, hb_state.seq_step);
-            screen_info(buf);
+            // ---- Phase 10: test harness -- port of buttons.s ----------
+            // Space=restart, Stop=stop all sound, A-O=PlayFX sample 1-15
+            // at C-4 on UA channel 6, X=StopFX channel 6. RETURN exits the
+            // harness (buttons.s itself has no exit key -- the standalone
+            // player's main loop runs forever -- so this is this port's
+            // own addition to get back to BASIC cleanly).
+            screen_blank_line();
+            screen_info("Test harness (buttons.s):");
+            screen_hint("SPACE=restart  STOP=silence");
+            screen_hint("A-O=play FX 1-15   X=stop FX");
+            screen_hint("RETURN to exit");
 
-            // ---- Phase 4: IRQ trampoline check (condensed -- fully ---
-            // verified already: steady +39/10 frames = ~195Hz, matching
-            // the embedded bpmtable.bin exactly). Quick 2-point check
-            // just to confirm it's still alive, not a full re-verify.
+            for (;;)
             {
-                unsigned int t0, t1;
-                unsigned char f;
-                t0 = hb_debug_tick_count;
-                for (f = 0; f < 10; f++)
-                    vic_waitFrame();
-                t1 = hb_debug_tick_count;
-                sprintf(buf, "irq: %u -> %u", t0, t1);
-                screen_info(buf);
-            }
+                hb_test_getin();
 
-            // ---- Phase 5: pattern-row fetch (silent, no audio) -------
-            // Calls hb_fetch_pattern_row() directly (not via hb_tick --
-            // that needs PlayPatternRow/Modulations/RegisterUpdate, which
-            // don't exist until Phases 6-9). Prints the interesting
-            // non-zero bytes of the first two fetched rows, cross-checked
-            // offline against a direct dd/od dump of the .reu file at
-            // REU 0x010000/0x010040 (pattern 1, rows 0-1).
-            {
-                unsigned char r;
-                for (r = 0; r < 2; r++)
+                if (hb_test_key == 0x0D)       // RETURN: exit harness
+                    break;
+                else if (hb_test_key == 0x20)  // Space: restart music
+                    hb_init(0, 1);
+                else if (hb_test_key == 0x03)  // Run/Stop: stop all sound
+                    hb_stop_all();
+                else if ((hb_test_key & 0xF0) == 0x40) // A-O ($41-$4F)
                 {
-                    hb_fetch_pattern_row();
-                    sprintf(buf, "row%u b:%u p:%04x [10-15]=%02x%02x%02x%02x%02x%02x",
-                            r, hb_state.patt_bank, hb_state.patt_ptr,
-                            hb_row_buf[10], hb_row_buf[11], hb_row_buf[12],
-                            hb_row_buf[13], hb_row_buf[14], hb_row_buf[15]);
-                    screen_info(buf);
+                    unsigned char n = (unsigned char)(hb_test_key & 0x0F);
+                    if (n != 0) // no sample $00 ('@')
+                        hb_play_fx(6, n, 0x26); // channel 6, note C-4
                 }
+                else if (hb_test_key == 0x58)  // 'X': stop FX channel 6
+                    hb_stop_fx(6);
             }
+
+            hb_stop_all();
         }
     }
 

@@ -297,6 +297,7 @@ void hb_stop_all(void)
 // internals, not part of the public API in hbplayer.h.
 static void hb_sid_hard_restart(void);
 static void hb_early_gate_on(void);
+static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned char sample_idx);
 static void hb_play_pattern_row(void);
 static void hb_register_update(void);
 static void hb_modulations(void);
@@ -1031,25 +1032,24 @@ static unsigned hb_get_ultimate_freq(unsigned char freq_hi, unsigned char freq_l
 }
 
 // ---------------------------------------------------------------
-// hb_play_sample_note — port of PlaySampleNote. Unlike SID's frequency
-// (which is only READ by hardware once RegisterUpdate flushes SIDImage),
-// the UA rate register has no shadow/batch mechanism in the original --
-// only the gate/control byte is deferred via UAShadowGate. So this writes
-// sample-start/length/loop-point/volume/pan/rate directly to hardware
-// immediately (matching the original's own direct pokes), and only
-// defers the final gate-trigger byte into hb_ua[].shadow_gate for
-// hb_register_update_ua() to flush.
+// hb_play_sample_note — port of PlaySampleNote's row-triggered entry:
+// reads the sample number from the row buffer, handles the tied-note case
+// (sample number 0), and otherwise hands off to hb_trigger_sample() for
+// everything from there on (matches the original's ".editorentry" split,
+// shared with hb_play_fx()).
 //
-// No Phase-9-deferred simplifications here (unlike hb_play_sid_note) --
-// PlaySampleNote has no per-tick modulation dependency for its initial
-// trigger (arpeggio/vibrato are SID-only concepts); portamento sliding is
-// still Phase 9 scope, but the *initial* rate here is already exactly
-// what the original computes.
+// Unlike SID's frequency (which is only READ by hardware once
+// RegisterUpdate flushes SIDImage), the UA rate register has no shadow/
+// batch mechanism in the original -- only the gate/control byte is
+// deferred via UAShadowGate. So hb_trigger_sample() writes sample-start/
+// length/loop-point/volume/pan/rate directly to hardware immediately
+// (matching the original's own direct pokes), and only defers the final
+// gate-trigger byte into hb_ua[].shadow_gate for hb_register_update_ua()
+// to flush.
 // ---------------------------------------------------------------
 static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
 {
     hb_ua_channel_t *c = &hb_ua[ua_idx];
-    volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
     unsigned char sample_num = hb_row_buf[ua_idx * 2 + 1];
     unsigned char note = (unsigned char)(raw_note + 9); // "note value adjust" (matches PlayFX's own +9)
 
@@ -1079,15 +1079,31 @@ static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
         return;
     }
 
+    hb_trigger_sample(ua_idx, note, (unsigned char)(sample_num - 1));
+}
+
+// ---------------------------------------------------------------
+// hb_trigger_sample — port of PlaySampleNote's ".editorentry" continuation:
+// everything from computing the sample pointer onward, shared by BOTH the
+// normal row-triggered path (hb_play_sample_note, after its tied-note
+// check) and hb_play_fx() (which has no row buffer / tied-note concept at
+// all and jumps straight here in the original). `note` is the
+// already-"+9"-adjusted note value; `sample_idx` is 0-63 (already -1'd).
+// ---------------------------------------------------------------
+static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned char sample_idx)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
+
     {
-        hb_sample_params_t *sp = &hb_songdata.sample_params[sample_num - 1];
+        hb_sample_params_t *sp = &hb_songdata.sample_params[sample_idx];
         unsigned char tempy;
         unsigned linear, rate;
         unsigned char loop_mode;
         unsigned long sample_addr, length;
 
-        c->sample_lo = (unsigned char)(sample_num - 1); // index, not a real pointer
-        c->sample_hi = 1;                                // nonzero = sample active
+        c->sample_lo = sample_idx; // index, not a real pointer
+        c->sample_hi = 1;           // nonzero = sample active
 
         // Immediate stop -- "note: writing directly to UA register" in
         // the original; this is a real direct poke, not shadow-deferred.
@@ -1881,4 +1897,46 @@ static void hb_modulations(void)
 
     for (ua_idx = 0; ua_idx < HB_UA_CHANNELS; ua_idx++)
         hb_modulate_ua_channel(ua_idx);
+}
+
+// =================================================================
+// Phase 10: PlayFX / StopFX (manual sample trigger, outside song playback)
+// =================================================================
+
+// ---------------------------------------------------------------
+// hb_play_fx — port of PlayFX. Validates the channel, then reproduces
+// PlayFX's ".play" (note+9, sample-1, channel lookup) before jumping into
+// the SAME hb_trigger_sample() continuation a row-triggered UA note uses
+// (matches the original's `jmp PlaySampleNote.editorentry` -- PlayFX has
+// no row buffer or tied-note concept, so it skips straight to the shared
+// "compute sample pointer onward" logic, including the sample's own
+// note_pitch/transpose application).
+//
+// sei/cli (not php/plp): matches the original exactly -- PlayFX is a
+// public API called from outside the tick IRQ (unlike e.g. hb_set_tempo,
+// which can be called from within it via a Bt command and must preserve
+// the caller's interrupt state), so unconditionally enabling interrupts
+// on exit is correct here.
+// ---------------------------------------------------------------
+void hb_play_fx(unsigned char ch, unsigned char sample, unsigned char note)
+{
+    if (ch >= 7)
+        return;
+
+    __asm { sei }
+    hb_trigger_sample(ch, (unsigned char)(note + 9), (unsigned char)(sample - 1));
+    __asm { cli }
+}
+
+// ---------------------------------------------------------------
+// hb_stop_fx — port of StopFX.
+// ---------------------------------------------------------------
+void hb_stop_fx(unsigned char ch)
+{
+    if (ch >= 7)
+        return;
+
+    __asm { sei }
+    hb_stop_sample_note(ch);
+    __asm { cli }
 }
