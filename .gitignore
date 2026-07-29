@@ -1,6 +1,13 @@
 # Local config — not committed
 .env
 
+# Licensed third-party Heartbeat player source — kept locally as a porting
+# reference only, not published. Only our C conversion (include/hbplayer.*) is public.
+reference/
+
+# Test song files (large binary assets, deployed to U64 SD/USB, not committed)
+*.reu
+
 # Build output
 build/*.prg
 build/*.asm

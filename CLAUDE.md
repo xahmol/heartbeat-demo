@@ -18,9 +18,11 @@ possible to **C** as an Oscar64 library, so any Oscar64/U64 project can play a H
 song without hand-written assembly.
 
 The Heartbeat Soundtracker author (Aleksi Eeben / Eight Bit Shed) has explicitly given
-permission to redistribute the player source publicly and to publish an Oscar64 library
-derived from it — see `NOTICE.md` for the full attribution requirement. The reference
-source therefore lives in-repo (not gitignored) at `reference/heartbeat-player-src/`.
+permission to redistribute the player source and to publish an Oscar64 library derived
+from it — see `NOTICE.md` for the full attribution requirement. By the project owner's
+choice, only the C conversion (`include/hbplayer.h/.c`) is published; the original
+assembly reference source is kept **local-only** at `reference/heartbeat-player-src/`
+(gitignored — see `.gitignore`), not pushed to GitHub.
 
 ## Build
 
@@ -43,7 +45,7 @@ The Makefile sets `-i=include -tm=c64 -tf=prg -O2 -dNOFLOAT`. Oscar64 follows
 | `include/defines.h` | Project-wide constants: PETSCII codes, screen codes, colour palette (`COL_*`), string limits, `CharWin cw` extern, `APP_NAME` |
 | `include/` | Reusable library headers/sources (turbo, audio, UCI) |
 | `build/` | Compiler output (`.prg`, `.map`, `.asm`, `.lbl`) |
-| `reference/heartbeat-player-src/` | Heartbeat Soundtracker standalone player 6502 source (from the gold license, redistribution permitted — see `NOTICE.md`), kept in-repo for porting reference — see below |
+| `reference/heartbeat-player-src/` | **Gitignored, local-only.** Heartbeat Soundtracker standalone player 6502 source (from the gold license; redistribution permitted per `NOTICE.md`, but kept unpublished by choice — only the C conversion is public) — see below |
 
 This repo currently has **no visual effects or Heartbeat playback yet** — it is a
 buildchain scaffold only. Hardware detection (`src/detect.c`) confirms UCI, 16 MB REU,
@@ -89,9 +91,9 @@ levels) which the Heartbeat editor itself expects:
 
 ## Heartbeat Soundtracker player — porting reference
 
-The standalone player source lives in `reference/heartbeat-player-src/` (in-repo,
-redistribution explicitly permitted by the author — see `NOTICE.md`). It was obtained
-via a gold license for Heartbeat Soundtracker and mirrors
+The standalone player source lives in `reference/heartbeat-player-src/` (local-only,
+gitignored — see `NOTICE.md` for the redistribution permission and why it's kept
+unpublished anyway). It was obtained via a gold license for Heartbeat Soundtracker and mirrors
 `D:\Retro\Commodore\Heartbeat Soundtracker\Player Source Code` (accessible from WSL at
 `/mnt/d/Retro/Commodore/Heartbeat Soundtracker/Player Source Code`).
 
