@@ -255,25 +255,39 @@ int main(void)
                     hb_state.patt_length, hb_state.tick, hb_state.seq_step);
             screen_info(buf);
 
-            // ---- Phase 4: IRQ trampoline/vector verification ------
-            // hb_state.tick itself hits 0 within milliseconds (not
-            // human-observable), so use the free-running debug counter
-            // instead. A single before/after snapshot showed no growth
-            // across a 10-frame wait -- take 5 snapshots over ~1 second
-            // instead to see the actual growth pattern (flatlines
-            // entirely vs. grows once then stops vs. grows slowly).
+            // ---- Phase 4: IRQ trampoline check (condensed -- fully ---
+            // verified already: steady +39/10 frames = ~195Hz, matching
+            // the embedded bpmtable.bin exactly). Quick 2-point check
+            // just to confirm it's still alive, not a full re-verify.
             {
-                unsigned int snap[5];
-                unsigned char s, f;
-                for (s = 0; s < 5; s++)
-                {
-                    for (f = 0; f < 10; f++)
-                        vic_waitFrame();
-                    snap[s] = hb_debug_tick_count;
-                }
-                sprintf(buf, "irq: %u %u %u %u %u",
-                        snap[0], snap[1], snap[2], snap[3], snap[4]);
+                unsigned int t0, t1;
+                unsigned char f;
+                t0 = hb_debug_tick_count;
+                for (f = 0; f < 10; f++)
+                    vic_waitFrame();
+                t1 = hb_debug_tick_count;
+                sprintf(buf, "irq: %u -> %u", t0, t1);
                 screen_info(buf);
+            }
+
+            // ---- Phase 5: pattern-row fetch (silent, no audio) -------
+            // Calls hb_fetch_pattern_row() directly (not via hb_tick --
+            // that needs PlayPatternRow/Modulations/RegisterUpdate, which
+            // don't exist until Phases 6-9). Prints the interesting
+            // non-zero bytes of the first two fetched rows, cross-checked
+            // offline against a direct dd/od dump of the .reu file at
+            // REU 0x010000/0x010040 (pattern 1, rows 0-1).
+            {
+                unsigned char r;
+                for (r = 0; r < 2; r++)
+                {
+                    hb_fetch_pattern_row();
+                    sprintf(buf, "row%u b:%u p:%04x [10-15]=%02x%02x%02x%02x%02x%02x",
+                            r, hb_state.patt_bank, hb_state.patt_ptr,
+                            hb_row_buf[10], hb_row_buf[11], hb_row_buf[12],
+                            hb_row_buf[13], hb_row_buf[14], hb_row_buf[15]);
+                    screen_info(buf);
+                }
             }
         }
     }

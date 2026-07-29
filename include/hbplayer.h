@@ -217,6 +217,11 @@ void hb_play_fx(unsigned char ch, unsigned char sample, unsigned char note);
 void hb_stop_fx(unsigned char ch);
 // StopFX port: stop note on UA channel ch (0-6); releases loop first if loop mode 2.
 
+void hb_fetch_pattern_row(void);
+// FetchPatternRow port: fetches the next pattern row into hb_row_buf via
+// reu_fetch(), advancing the sequencer/pattern pointers as needed. Not
+// yet wired into hb_tick's real dispatch (Phase 5 scope) -- see hbplayer.c.
+
 extern hb_songdata_t hb_songdata;
 
 // Phase-4-only debug counter -- see hbplayer.c's hb_tick(). Remove once

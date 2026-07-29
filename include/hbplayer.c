@@ -407,3 +407,91 @@ void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 
     __asm { cli }
 }
+
+// ---------------------------------------------------------------
+// hb_fetch_pattern_row — port of FetchPatternRow, through the REU row
+// fetch and pattern-pointer advance. Does NOT include SIDHardRestart
+// (that lands with Phase 6's SID note-trigger port) -- PHASE 5 scope is
+// just the row-fetch/sequencer-advance plumbing, verified by direct
+// repeated calls from main.c's debug block, not yet wired into hb_tick's
+// real per-tick dispatch (that needs PlayPatternRow/Modulations/
+// RegisterUpdate, which don't exist until Phases 6-9).
+//
+// Pattern REU addressing: each pattern occupies an exact 4096-byte
+// (0x1000) REU slot, starting at slot (pattern_number + 15) -- i.e.
+// REU address = (pattern_number + 15) << 12. Traced from the original's
+// "adc #$0f" then four (asl PattPointerH / rol A) steps starting A=0,
+// which computes exactly value*16 split across a 16-bit hi:lo pair.
+// 16 patterns exactly tile one 65536-byte REU bank (16 x 4096 = 65536),
+// so the bank only ever changes when switching patterns, never mid-
+// pattern (64 rows x 64 bytes = 4096 bytes = exactly one slot).
+//
+// MusicPlayMode==2 (pattern-loop/editor "PatternBuffer" mode) is an
+// explicit MVP non-goal (see port plan) -- the fallback below just loops
+// the current pattern from row 0 instead of reading the (unimplemented)
+// PatternBuffer at $C000.
+// ---------------------------------------------------------------
+void hb_fetch_pattern_row(void)
+{
+    unsigned long reu_addr;
+
+    hb_state.patt_step++;
+
+    if (hb_state.patt_step >= hb_state.patt_length)
+    {
+        // End of pattern: advance sequencer (song play) or loop (fallback).
+        if (hb_state.play_mode == 1)
+        {
+            unsigned char pat;
+
+            hb_state.seq_step++;
+            pat = hb_songdata.sequencer_patterns[hb_state.seq_step];
+
+            if (pat == 0)
+            {
+                hb_state.play_mode = 0;
+                memset(hb_row_buf, 0, sizeof(hb_row_buf));
+                return;
+            }
+
+            if (pat == 0xFF)
+            {
+                // Loop command: jump to the loop-target step (stored in
+                // the transpose table at this step), then re-read the
+                // pattern number there.
+                hb_state.seq_step = hb_songdata.sequencer_transpose[hb_state.seq_step];
+                pat = hb_songdata.sequencer_patterns[hb_state.seq_step];
+                if (pat == 0)
+                {
+                    hb_state.play_mode = 0;
+                    memset(hb_row_buf, 0, sizeof(hb_row_buf));
+                    return;
+                }
+            }
+
+            if (pat >= 0x41)
+            {
+                // Illegal pattern number (or loop target) -> song end.
+                hb_state.play_mode = 0;
+                memset(hb_row_buf, 0, sizeof(hb_row_buf));
+                return;
+            }
+
+            reu_addr = ((unsigned long)(pat + 15)) << 12;
+            hb_state.patt_bank = (unsigned char)(reu_addr >> 16);
+            hb_state.patt_ptr  = (unsigned)(reu_addr & 0xFFFFUL);
+            hb_state.patt_step = 0;
+            hb_state.transpose_now = (signed char)hb_songdata.sequencer_transpose[hb_state.seq_step];
+        }
+        else
+        {
+            // Non-goal fallback (play_mode==2): loop current pattern from row 0.
+            hb_state.patt_ptr = 0;
+            hb_state.patt_step = 0;
+        }
+    }
+
+    reu_addr = ((unsigned long)hb_state.patt_bank << 16) | hb_state.patt_ptr;
+    reu_fetch(hb_row_buf, reu_addr, 64);
+    hb_state.patt_ptr = (unsigned)(hb_state.patt_ptr + 64);
+}
