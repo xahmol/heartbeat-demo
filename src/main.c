@@ -258,14 +258,21 @@ int main(void)
             // ---- Phase 4: IRQ trampoline/vector verification ------
             // hb_state.tick itself hits 0 within milliseconds (not
             // human-observable), so use the free-running debug counter
-            // instead: if it grows across a ~10-frame wait, hb_irq/hb_tick
-            // are genuinely firing via the installed $0314 vector.
+            // instead. A single before/after snapshot showed no growth
+            // across a 10-frame wait -- take 5 snapshots over ~1 second
+            // instead to see the actual growth pattern (flatlines
+            // entirely vs. grows once then stops vs. grows slowly).
             {
-                unsigned int before = hb_debug_tick_count;
-                unsigned char f;
-                for (f = 0; f < 10; f++)
-                    vic_waitFrame();
-                sprintf(buf, "irq fires: %u -> %u", before, hb_debug_tick_count);
+                unsigned int snap[5];
+                unsigned char s, f;
+                for (s = 0; s < 5; s++)
+                {
+                    for (f = 0; f < 10; f++)
+                        vic_waitFrame();
+                    snap[s] = hb_debug_tick_count;
+                }
+                sprintf(buf, "irq: %u %u %u %u %u",
+                        snap[0], snap[1], snap[2], snap[3], snap[4]);
                 screen_info(buf);
             }
         }
