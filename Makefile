@@ -71,6 +71,11 @@ TARGET = build/$(MAIN).prg
 
 ########################################
 
+# Heartbeat test song, deployed alongside the .prg (not committed to git —
+# large binary test asset, see .gitignore). Must match hb_song_file[] in
+# src/main.c.
+SONGFILE = assets/Knight Rider Theme.reu
+
 # Demo install path on SD/USB (must match demo_path[] in src/main.c once used)
 INSTALL_PATH = idi8b/heartbeat-demo
 # NOTE: The zip target hardcodes the first path component "idi8b" in the cleanup
@@ -107,6 +112,8 @@ zip: $(TARGET)
 	$(MKDIR) build/$(INSTALL_PATH) 2>$(NULLDEV) ; true
 	cp $(TARGET)   build/$(INSTALL_PATH)/$(MAIN).prg
 	cp README.md   build/$(INSTALL_PATH)/README.md
+	@if [ -f "$(SONGFILE)" ]; then cp "$(SONGFILE)" build/$(INSTALL_PATH)/; else \
+		echo "WARNING: $(SONGFILE) not found -- zip built without test song"; fi
 	cd build && zip -r $(MAIN)-$(VERSION).zip idi8b/
 	$(RMDIR) build/idi8b 2>$(NULLDEV) ; true
 
@@ -116,3 +123,4 @@ check-deploy:
 
 deploy: check-deploy $(TARGET)
 	wput -u $(TARGET) $(ULTFTP)$(ULTPATH)$(MAIN).prg
+	@if [ -f "$(SONGFILE)" ]; then wput -u "$(SONGFILE)" $(ULTFTP)$(ULTPATH)"$(notdir $(SONGFILE))"; fi

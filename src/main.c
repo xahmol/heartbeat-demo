@@ -30,6 +30,17 @@
 #define VERSION "v0.1.0-dev"
 #endif
 
+// Heartbeat test song filename, on any SD/USB drive's idi8b/heartbeat-demo/
+// (see Makefile's INSTALL_PATH — must match hb_load()'s internal search path).
+// Identity charmap override: petscii.h's global charmap would otherwise remap
+// these path bytes to the wrong PETSCII case for UCI's raw-ASCII filesystem protocol.
+#pragma charmap(97, 97, 26)   // a-z -> a-z (identity, overrides petscii.h)
+#pragma charmap(65, 65, 26)   // A-Z -> A-Z (identity)
+static char hb_song_file[] = "Knight Rider Theme.reu";
+#pragma charmap(97, 65, 26)   // restore petscii.h: a-z -> A-Z
+#pragma charmap(65, 97, 26)   // restore petscii.h: A-Z -> a-z
+#define HB_SONG_REU_BASE  0x000000UL
+
 // ---------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------
@@ -231,6 +242,52 @@ int main(void)
             sprintf(buf, "  tables[0] : %02x %02x %02x %02x %02x",
                     tb[0], tb[1], tb[2], tb[3], tb[4]);
             screen_info(buf);
+        }
+    }
+
+    // ---- Heartbeat player: Phase 2 song-load debug check --------
+    // Loads the test song via UCI (scanning SD/USB drives) and prints
+    // song-data header fields, cross-checked against a hex dump of the
+    // .reu file taken independently of this code path. Temporary —
+    // superseded by real playback once later phases land.
+    if (detected_audio_version > 0)
+    {
+        char buf[40];
+        screen_blank_line();
+        screen_info("Loading Heartbeat song...");
+
+        if (hb_load(hb_song_file, HB_SONG_REU_BASE))
+        {
+            screen_result("Song ", 1, "Loaded");
+            sprintf(buf, "  tempo: %u  hardrestart: %u",
+                    hb_songdata.starting_tempo, hb_songdata.hardrestart_time);
+            screen_info(buf);
+            sprintf(buf, "  pattern length: %u",
+                    hb_songdata.song_pattern_length);
+            screen_info(buf);
+            sprintf(buf, "  sidvol: %02x %02x %02x %02x %02x %02x %02x %02x",
+                    hb_songdata.sid_volumes[0], hb_songdata.sid_volumes[1],
+                    hb_songdata.sid_volumes[2], hb_songdata.sid_volumes[3],
+                    hb_songdata.sid_volumes[4], hb_songdata.sid_volumes[5],
+                    hb_songdata.sid_volumes[6], hb_songdata.sid_volumes[7]);
+            screen_info(buf);
+            sprintf(buf, "  sidaddr1: %02x%02x %02x%02x %02x%02x %02x%02x",
+                    hb_songdata.sid_addresses[1], hb_songdata.sid_addresses[0],
+                    hb_songdata.sid_addresses[3], hb_songdata.sid_addresses[2],
+                    hb_songdata.sid_addresses[5], hb_songdata.sid_addresses[4],
+                    hb_songdata.sid_addresses[7], hb_songdata.sid_addresses[6]);
+            screen_info(buf);
+            sprintf(buf, "  sidaddr2: %02x%02x %02x%02x %02x%02x %02x%02x",
+                    hb_songdata.sid_addresses[9], hb_songdata.sid_addresses[8],
+                    hb_songdata.sid_addresses[11], hb_songdata.sid_addresses[10],
+                    hb_songdata.sid_addresses[13], hb_songdata.sid_addresses[12],
+                    hb_songdata.sid_addresses[15], hb_songdata.sid_addresses[14]);
+            screen_info(buf);
+        }
+        else
+        {
+            screen_result("Song ", 0, "Not found");
+            screen_hint("Place .reu in idi8b/heartbeat-demo/");
         }
     }
 
