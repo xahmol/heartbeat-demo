@@ -40,8 +40,21 @@ typedef struct {
 } hb_sample_params_t;              // 32 bytes
 
 // One 64-byte INSTPARAMS record (up to 64 of these, at SONGDATA+$1000)
+//
+// CORRECTED 2026-07-29 (hardware cross-check against the real test song):
+// the original Phase 1 layout put a "wave_arp_table" at $00-$0F. That was
+// wrong -- a live hardware read showed SID register writes reflecting the
+// ASCII bytes of an instrument name ("Reso Pluck") instead of a real
+// waveform value, which traced back to $00-$0F actually being the
+// instrument's NAME (editor-only text, never read by the player) and the
+// true wave/arpeggio tables sitting at $20-$2F/$30-$3F instead -- derived
+// from ModulateChannel's actual indexing (`and #$0f; ora #$30` -> arp
+// offset $30-$3F; `eor #$10` -> wave offset $20-$2F, confirmed via
+// `(step&0xF)|0x30` / `^0x10` in Python against the source). Also
+// independently confirmed the correct offset $20 holds $41 (a valid SID
+// pulse+gate control byte) in the real song data, not $52 ('R').
 typedef struct {
-    unsigned char wave_arp_table[0x10]; // $00-$0F — combined wave/arpeggio step table (16 steps)
+    unsigned char _name[0x10];          // $00-$0F — instrument name (editor-only, never read by the player)
     unsigned char env_ad;               // $10
     unsigned char env_sr;                // $11
     unsigned char finetune;              // $12 — signed
@@ -58,7 +71,8 @@ typedef struct {
     unsigned char cutoff_mod;            // $1D — signed rate/direction
     unsigned char cutoff_top;            // $1E
     unsigned char cutoff_bottom;         // $1F
-    unsigned char _reserved[0x20];       // $20-$3F — never read by the player
+    unsigned char wave_table[0x10];      // $20-$2F — waveform step table (16 steps)
+    unsigned char arp_table[0x10];       // $30-$3F — arpeggio step table (16 steps)
 } hb_inst_params_t;                      // 64 bytes
 
 // The full $2000-byte song-data blob, streamed from REU (fixed REU source

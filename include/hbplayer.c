@@ -724,10 +724,10 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
         c->wave_arp_step = 0;
         c->gate_mask = 0xFF; // gate from wave table
 
-        // Phase 6 simplification: static waveform from wave/arp table step
-        // 0 (Phase 9 steps through this table every tick). Fall back to
-        // triangle+gate if step 0 is a command byte ($FC-$FF) or empty.
-        w = inst->wave_arp_table[0];
+        // Phase 6 simplification: static waveform from the wave table's
+        // step 0 (Phase 9 steps through this table every tick). Fall back
+        // to triangle+gate if step 0 is a command byte ($FC-$FF) or empty.
+        w = inst->wave_table[0];
         if (w == 0 || w >= 0xFC)
             w = 0x10;
         c->sid_wave = (unsigned char)(w & c->gate_mask);
