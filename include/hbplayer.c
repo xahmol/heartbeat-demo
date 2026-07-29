@@ -2,12 +2,12 @@
 Heartbeat Soundtracker player — C/Oscar64 port, implementation
 See hbplayer.h for API documentation and NOTICE.md for attribution.
 
-Phases 1-6 done: data structures, song loader, NTSC detection, init/tempo/
-stop-all, tick IRQ, pattern-row fetch, SID note trigger + register flush
-(simplified -- no PWM/filter/vibrato/arpeggio movement or track-command
-dispatch yet, see hb_play_sid_note()'s header comment). UA sample trigger
-(Phase 7), track commands (Phase 8), and full modulation (Phase 9) still
-outstanding -- see
+Phases 1-7 done: data structures, song loader, NTSC detection, init/tempo/
+stop-all, tick IRQ, pattern-row fetch, SID + UA note trigger with register
+flush (SID side simplified -- no PWM/filter/vibrato/arpeggio movement or
+track-command dispatch yet, see hb_play_sid_note()'s header comment; UA
+side is a full port of PlaySampleNote/StopSampleNote). Track commands
+(Phase 8) and full modulation (Phase 9) still outstanding -- see
 /home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md for phasing.
 ******************************************************************/
 
@@ -290,16 +290,16 @@ void hb_stop_all(void)
 }
 
 // Forward declarations -- implementations are below hb_fetch_pattern_row()
-// (Phase 6: SID note trigger + shadow flush). Kept as static internals,
-// not part of the public API in hbplayer.h.
+// (Phases 6-7: SID/UA note trigger + shadow flush). Kept as static
+// internals, not part of the public API in hbplayer.h.
 static void hb_sid_hard_restart(void);
-static void hb_play_pattern_row_sid(void);
-static void hb_register_update_sid(void);
+static void hb_play_pattern_row(void);
+static void hb_register_update(void);
 
 // ---------------------------------------------------------------
-// hb_tick — port of PlayerUpdate (SID portion only -- Ultimate Audio
-// dispatch is Phase 7, track commands are Phase 8, live modulation
-// (vibrato/PWM/filter-sweep/wave-arp stepping, portamento) is Phase 9).
+// hb_tick — port of PlayerUpdate (SID + UA; track commands are Phase 8,
+// live modulation -- vibrato/PWM/filter-sweep/wave-arp stepping,
+// portamento -- is Phase 9).
 //
 // Mirrors the original's MusicPlayMode dispatch exactly:
 //   bit7 set ($80)      -> return immediately, skip even RegisterUpdate
@@ -312,10 +312,10 @@ static void hb_register_update_sid(void);
 //                          then flush registers
 //
 // __interrupt: Oscar64 auto-saves whatever ZP it statically determines
-// this function's call tree touches. Re-verify via -g build + .asm
-// whenever this body grows further (Phase 7+) -- do NOT assume the
-// trampoline's manual save requirements still hold. See modplay.c's
-// hb_irq-equivalent (modplay_irq) for the full methodology.
+// this function's call tree touches. Re-verified via -g build + .asm for
+// Phase 7's additions (see hb_irq's comment for the full gap-analysis
+// history) -- do NOT assume past results still hold once this body grows
+// again (Phase 8+).
 // ---------------------------------------------------------------
 // Phase-4-only: free-running, never-clamped fire counter for hardware
 // verification (hb_state.tick itself starts small and hits 0 within
@@ -336,7 +336,7 @@ __interrupt void hb_tick(void)
 
         if (hb_state.tick == 0)
         {
-            hb_play_pattern_row_sid(); // resets hb_state.tick at its own end
+            hb_play_pattern_row(); // resets hb_state.tick at its own end
         }
         else if (hb_state.tick == hb_songdata.hardrestart_time)
         {
@@ -345,7 +345,7 @@ __interrupt void hb_tick(void)
         }
     }
 
-    hb_register_update_sid();
+    hb_register_update();
 }
 
 // ---------------------------------------------------------------
@@ -748,9 +748,13 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
 // ---------------------------------------------------------------
 // hb_play_pattern_row_sid — SID portion of PlayPatternRow. The Cmd-channel
 // command check (checked first in the original) and per-channel command
-// bytes (bit7 set) are Phase 8 scope -- skipped here. Resets
-// hb_state.tick to tempo_ticks at the end, matching PlayPatternRow's own
-// tail exactly (so hb_tick doesn't need to duplicate that reset).
+// bytes (bit7 set) are Phase 8 scope -- skipped here.
+//
+// Does NOT update last_ua_mutes/last_sid_mutes or reset hb_state.tick --
+// those happen once, in hb_play_pattern_row() below, AFTER both this and
+// the UA dispatch (hb_play_pattern_row_ua()) have run. Doing it here
+// instead would make the UA loop's mute-transition check always compare
+// the current row's mutes against itself instead of the previous row's.
 // ---------------------------------------------------------------
 static void hb_play_pattern_row_sid(void)
 {
@@ -789,11 +793,6 @@ static void hb_play_pattern_row_sid(void)
             }
         }
     }
-
-    hb_state.last_ua_mutes = hb_songdata.sequencer_ultmutes[hb_state.seq_step];
-    hb_state.last_sid_mutes = hb_songdata.sequencer_sidmutes[hb_state.seq_step];
-
-    hb_state.tick = hb_state.tempo_ticks;
 }
 
 // ---------------------------------------------------------------
@@ -838,4 +837,295 @@ static void hb_register_update_sid(void)
     for (i = 0; i < HB_MAX_SIDS; i++)
         if (hb_sids[i].addr != 0)
             hb_write_one_sid(&hb_sids[i]);
+}
+
+// =================================================================
+// Phase 7: Ultimate Audio sample trigger + shadow flush
+// =================================================================
+
+// ---------------------------------------------------------------
+// hb_get_ultimate_freq — port of GetUltimateFreq: the UA counterpart to
+// hb_get_sid_freq(), same octave-fold + per-octave table lookup, but two
+// differences from the SID version (verified against the source): the
+// shift-amount table is in the OPPOSITE order (shift = Y/3, not 7-Y/3),
+// and the result gets an extra "-1 with borrow" adjustment at the end
+// (a plain 16-bit `v -= 1` in C already wraps/borrows correctly, so no
+// separate borrow-flag logic is needed here). Clock-independent (fixed
+// 6.25MHz UA reference) -- no NTSC variant, unlike the SID table.
+// ---------------------------------------------------------------
+static unsigned hb_get_ultimate_freq(unsigned char freq_hi, unsigned char freq_lo)
+{
+    unsigned char y = freq_hi;
+    unsigned char x = freq_lo;
+    unsigned char shift;
+    unsigned page;
+    unsigned v;
+
+    if ((signed char)y < 0)
+    {
+        y = 0;
+        x = 0;
+    }
+
+    while (y >= 0x18)
+        y = (unsigned char)(y - 3);
+
+    shift = (unsigned char)(y / 3);       // reversed vs hb_get_sid_freq
+    page  = (unsigned)(y % 3) * 256;
+
+    v = ((unsigned)hb_ultfreq[page + 0x300 + x] << 8) | hb_ultfreq[page + x];
+    v >>= shift;
+    v -= 1;
+    return v;
+}
+
+// ---------------------------------------------------------------
+// hb_play_sample_note — port of PlaySampleNote. Unlike SID's frequency
+// (which is only READ by hardware once RegisterUpdate flushes SIDImage),
+// the UA rate register has no shadow/batch mechanism in the original --
+// only the gate/control byte is deferred via UAShadowGate. So this writes
+// sample-start/length/loop-point/volume/pan/rate directly to hardware
+// immediately (matching the original's own direct pokes), and only
+// defers the final gate-trigger byte into hb_ua[].shadow_gate for
+// hb_register_update_ua() to flush.
+//
+// No Phase-9-deferred simplifications here (unlike hb_play_sid_note) --
+// PlaySampleNote has no per-tick modulation dependency for its initial
+// trigger (arpeggio/vibrato are SID-only concepts); portamento sliding is
+// still Phase 9 scope, but the *initial* rate here is already exactly
+// what the original computes.
+// ---------------------------------------------------------------
+static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
+    unsigned char sample_num = hb_row_buf[ua_idx * 2 + 1];
+    unsigned char note = (unsigned char)(raw_note + 9); // "note value adjust" (matches PlayFX's own +9)
+
+    if (sample_num == 0)
+    {
+        // Tied note: retarget portamento only (or jump instantly if speed is 0).
+        unsigned char t = (unsigned char)(note + c->note_pitch);
+        if (!(c->drum_flag & 0x80))
+            t = (unsigned char)(t + (unsigned char)hb_state.transpose_now);
+        if ((signed char)t < 0)
+            t = 0;
+
+        {
+            unsigned linear = ((unsigned)t) << 6;
+            c->target_freq_lo = (unsigned char)linear;
+            c->target_freq_hi = (unsigned char)(linear >> 8);
+
+            if (c->portamento == 0)
+            {
+                unsigned rate = hb_get_ultimate_freq((unsigned char)(linear >> 8), (unsigned char)linear);
+                c->freq_lo = (unsigned char)linear;
+                c->freq_hi = (unsigned char)(linear >> 8);
+                c->target_freq_hi = 0xFF; // flag: portamento target reached
+                audio_channel_set_rate(ua_idx, rate);
+            }
+        }
+        return;
+    }
+
+    {
+        hb_sample_params_t *sp = &hb_songdata.sample_params[sample_num - 1];
+        unsigned char tempy;
+        unsigned linear, rate;
+        unsigned char loop_mode;
+        unsigned long sample_addr, length;
+
+        c->sample_lo = (unsigned char)(sample_num - 1); // index, not a real pointer
+        c->sample_hi = 1;                                // nonzero = sample active
+
+        // Immediate stop -- "note: writing directly to UA register" in
+        // the original; this is a real direct poke, not shadow-deferred.
+        base[AUDIO_OFF_CTR] = 0x10;
+        c->shadow_gate = 0x10;
+
+        if (sp->reu_bank == 0)
+            return; // no sample in this slot
+
+        base[AUDIO_OFF_VOL] = sp->volume;
+        c->last_volume = sp->volume;
+        base[AUDIO_OFF_PAN] = sp->pan;
+        c->last_pan = sp->pan;
+
+        c->finetune_lo = sp->finetune;
+        c->finetune_hi = ((signed char)sp->finetune < 0) ? 0xFF : 0x00;
+
+        c->portamento = sp->portamento;
+
+        c->drum_flag = (unsigned char)(sp->flags & 0x80);
+        c->note_pitch = sp->note_pitch;
+
+        tempy = c->drum_flag
+                    ? sp->note_pitch                                            // no transpose for drum sounds
+                    : (unsigned char)(sp->note_pitch + (unsigned char)hb_state.transpose_now);
+
+        {
+            unsigned char t = (unsigned char)(note + tempy);
+            if ((signed char)t < 0)
+                t = 0;
+            linear = ((unsigned)t) << 6;
+        }
+        c->freq_lo = (unsigned char)linear;
+        c->freq_hi = (unsigned char)(linear >> 8);
+
+        loop_mode = (unsigned char)(sp->flags & 0x03);
+        c->loop_mode = loop_mode;
+
+        // Sample REU address = 0x01000000 | (reu_bank << 16) -- traced and
+        // confirmed exact against the reference during the port-plan design
+        // pass (every sample begins at a 64KB-aligned REU offset).
+        sample_addr = 0x01000000UL | ((unsigned long)sp->reu_bank << 16);
+        length = (unsigned long)sp->length[0] |
+                 ((unsigned long)sp->length[1] << 8) |
+                 ((unsigned long)sp->length[2] << 16);
+
+        if (loop_mode == 3)
+        {
+            // Loop mode 3: play only the loop A..B region, once, cropped
+            // (no actual looping) -- port of .looprangeoneshot.
+            unsigned long loop_a = (unsigned long)sp->loop_a[0] |
+                                    ((unsigned long)sp->loop_a[1] << 8) |
+                                    ((unsigned long)sp->loop_a[2] << 16);
+            unsigned long loop_b = (unsigned long)sp->loop_b[0] |
+                                    ((unsigned long)sp->loop_b[1] << 8) |
+                                    ((unsigned long)sp->loop_b[2] << 16);
+            if (loop_b == 0)
+            {
+                c->shadow_gate = 0x10; // don't play entire REU (matches source)
+                rate = hb_get_ultimate_freq((unsigned char)(linear >> 8), (unsigned char)linear);
+                audio_channel_set_rate(ua_idx, rate);
+                return;
+            }
+            sample_addr += loop_a;
+            length = loop_b - loop_a;
+            loop_mode = 0; // falls through to the "no loop" cropped-playback path
+        }
+
+        base[AUDIO_OFF_SMS + 0] = (unsigned char)(sample_addr >> 24);
+        base[AUDIO_OFF_SMS + 1] = (unsigned char)(sample_addr >> 16);
+        base[AUDIO_OFF_SMS + 2] = (unsigned char)(sample_addr >> 8);
+        base[AUDIO_OFF_SMS + 3] = (unsigned char)(sample_addr);
+        base[AUDIO_OFF_SML + 0] = (unsigned char)(length >> 16);
+        base[AUDIO_OFF_SML + 1] = (unsigned char)(length >> 8);
+        base[AUDIO_OFF_SML + 2] = (unsigned char)(length);
+
+        if (loop_mode == 0)
+        {
+            base[AUDIO_OFF_RPA + 0] = 0; base[AUDIO_OFF_RPA + 1] = 0; base[AUDIO_OFF_RPA + 2] = 0;
+            base[AUDIO_OFF_RPB + 0] = 0; base[AUDIO_OFF_RPB + 1] = 0; base[AUDIO_OFF_RPB + 2] = 0;
+            c->shadow_gate = 0x11; // gate only
+        }
+        else
+        {
+            unsigned long loop_a = (unsigned long)sp->loop_a[0] |
+                                    ((unsigned long)sp->loop_a[1] << 8) |
+                                    ((unsigned long)sp->loop_a[2] << 16);
+            unsigned long loop_b = (unsigned long)sp->loop_b[0] |
+                                    ((unsigned long)sp->loop_b[1] << 8) |
+                                    ((unsigned long)sp->loop_b[2] << 16);
+            base[AUDIO_OFF_RPA + 0] = (unsigned char)(loop_a >> 16);
+            base[AUDIO_OFF_RPA + 1] = (unsigned char)(loop_a >> 8);
+            base[AUDIO_OFF_RPA + 2] = (unsigned char)(loop_a);
+            base[AUDIO_OFF_RPB + 0] = (unsigned char)(loop_b >> 16);
+            base[AUDIO_OFF_RPB + 1] = (unsigned char)(loop_b >> 8);
+            base[AUDIO_OFF_RPB + 2] = (unsigned char)(loop_b);
+            c->shadow_gate = 0x13; // gate and loop
+        }
+
+        rate = hb_get_ultimate_freq((unsigned char)(linear >> 8), (unsigned char)linear);
+        audio_channel_set_rate(ua_idx, rate);
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_stop_sample_note — port of StopSampleNote.
+// ---------------------------------------------------------------
+static void hb_stop_sample_note(unsigned char ua_idx)
+{
+    hb_ua_channel_t *c = &hb_ua[ua_idx];
+    if (c->shadow_gate == 0x13 && c->loop_mode == 2)
+        c->shadow_gate = 0x11; // release (loop-with-release mode)
+    else
+        c->shadow_gate = 0x10; // gate off
+}
+
+// ---------------------------------------------------------------
+// hb_play_pattern_row_ua — UA portion of PlayPatternRow. Per-channel
+// command bytes (bit7 set, UATrackCMD) are Phase 8 scope -- skipped here.
+// See hb_play_pattern_row_sid()'s comment for why last_ua_mutes isn't
+// updated here either.
+// ---------------------------------------------------------------
+static void hb_play_pattern_row_ua(void)
+{
+    unsigned char ua_idx;
+
+    for (ua_idx = 0; ua_idx < HB_UA_CHANNELS; ua_idx++)
+    {
+        unsigned char bit = (unsigned char)(1 << ua_idx);
+
+        if (!(hb_songdata.sequencer_ultmutes[hb_state.seq_step] & bit))
+        {
+            if (hb_state.last_ua_mutes & bit) // was NOT muted last step -> just transitioned
+                hb_ua[ua_idx].shadow_gate = 0x10;
+            continue;
+        }
+
+        {
+            unsigned char note = hb_row_buf[ua_idx * 2];
+            if (note == 0)
+                continue;
+            if (note & 0x80)
+                continue; // track command (UATrackCMD) -- Phase 8 scope, no-op for now
+            if (note == 1)
+            {
+                hb_stop_sample_note(ua_idx);
+                continue;
+            }
+            hb_play_sample_note(ua_idx, note);
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_register_update_ua — UA half of RegisterUpdate: flush the deferred
+// shadow_gate control byte to hardware for all 7 UA channels.
+// ---------------------------------------------------------------
+static void hb_register_update_ua(void)
+{
+    unsigned char ua_idx;
+    for (ua_idx = 0; ua_idx < HB_UA_CHANNELS; ua_idx++)
+    {
+        volatile unsigned char *base =
+            (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
+        base[AUDIO_OFF_CTR] = hb_ua[ua_idx].shadow_gate;
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_play_pattern_row / hb_register_update — port of PlayPatternRow's and
+// RegisterUpdate's overall structure (Cmd-channel command dispatch, the
+// first thing in the original PlayPatternRow, is Phase 8 scope and
+// skipped here). These combine the SID and UA halves in the same order
+// as the original and do the once-per-row mute-state/tick-reset update
+// only after BOTH halves have run.
+// ---------------------------------------------------------------
+static void hb_play_pattern_row(void)
+{
+    hb_play_pattern_row_sid();
+    hb_play_pattern_row_ua();
+
+    hb_state.last_ua_mutes = hb_songdata.sequencer_ultmutes[hb_state.seq_step];
+    hb_state.last_sid_mutes = hb_songdata.sequencer_sidmutes[hb_state.seq_step];
+
+    hb_state.tick = hb_state.tempo_ticks;
+}
+
+static void hb_register_update(void)
+{
+    hb_register_update_sid();
+    hb_register_update_ua();
 }
