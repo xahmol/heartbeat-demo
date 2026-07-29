@@ -35,13 +35,61 @@ char detect_uci(void) {
 }
 
 // ---------------------------------------------------------------
+// Workaround for an Oscar64 optimizer regression (toolchain commit 3bbffe9,
+// "Improve __memmap storage modifier adherence for REU usage", 2026-06-20,
+// and its follow-ups; still present as of 0808a62 / v1.32.272, the version
+// installed here): the library's inline reu_count_pages() has its
+// volatile-read comparisons of the REU probe byte dead-code-eliminated at
+// -O2, so it always returns 0 even when a REU is present. Passing the probe
+// byte through this __noinline barrier forces the compiler to materialize
+// the value at a real call boundary instead of assuming it away. Same fix
+// already applied in UBoot64-v2 (src/main.c). See oscar64manual.md /
+// ~/.claude/oscar64.md for the full diagnosis.
+// ---------------------------------------------------------------
+__noinline char reu_probe_barrier(char v) {
+    return v;
+}
+
+static int hbdemo_reu_count_pages(void) {
+    volatile char c, d;
+
+    c = 0;
+    reu_store(0, &c, 1);
+    reu_load(0, &d, 1);
+
+    if (reu_probe_barrier(d) == 0) {
+        c = 0x47;
+        reu_store(0, &c, 1);
+        reu_load(0, &d, 1);
+
+        if (reu_probe_barrier(d) == 0x47) {
+            for (int i = 1; i < 256; i++) {
+                long l = (long)i << 16;
+                c = 0x47;
+                reu_store(l, &c, 1);
+                c = 0x00;
+                reu_store(0, &c, 1);
+
+                reu_load(l, &d, 1);
+                if (reu_probe_barrier(d) != 0x47)
+                    return i;
+            }
+
+            return 256;
+        }
+    }
+
+    return 0;
+}
+
+// ---------------------------------------------------------------
 // detect_reu
-// Uses Oscar64's reu_count_pages() which returns the number of
-// 64 KB pages (256 = 16 MB, 128 = 8 MB, etc.).
+// Uses hbdemo_reu_count_pages() (see workaround above), which returns the
+// number of 64 KB pages (256 = 16 MB, 128 = 8 MB, etc.).
 // The test is non-destructive enough for startup detection.
 // ---------------------------------------------------------------
 unsigned char detect_reu(void) {
-    int pages = reu_count_pages();
+    int pages = hbdemo_reu_count_pages();
 
     if (pages == 0) {
         detected_reu_mb = 0;

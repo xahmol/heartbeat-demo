@@ -660,6 +660,19 @@ hardware. Applied in UBoot64-v2 as `uboot64_reu_count_pages()` in
 `reu_count_pages()`, since the library function itself can't be patched from
 project source).
 
+**Second confirmed instance (heartbeat-demo, 2026-07-29):** same exact bug,
+same Oscar64 build. detect_reu() (src/detect.c) called the library's
+reu_count_pages() directly and always got 0 (REU check failed on real
+hardware, U64 Elite-II with 16 MB REU present and working fine in
+UltimateDemo2026 on the same box) — confirms this is not project-specific
+and will resurface anywhere `reu_count_pages()` is called under `-O2` on
+this toolchain version. UltimateDemo2026 "still working" is not evidence
+against the bug; its currently-deployed `.prg` predates this Oscar64
+regression and simply hasn't been rebuilt with the current compiler since.
+Fixed the same way: local `hbdemo_reu_count_pages()` in `src/detect.c` with
+the `__noinline` barrier, verified via `-g` build + `.asm` inspection
+(`JSR reu_probe_barrier` followed by a real `BNE`, not a fallthrough).
+
 **Status as of Oscar64 commit `0808a62` (2026-07-18, v1.32.272):** still
 broken. Pulled and rebuilt Oscar64 from `d0e1f5b` to `0808a62` (11 commits,
 including "Improve cross block/function accu forwarding", "Optimize switch
