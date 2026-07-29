@@ -1684,6 +1684,29 @@ void cwin_putat_printf(OricCharWin *w, uint8_t x, uint8_t y, const char *fmt, ..
 }
 ```
 
+### Static assertions via negative array size do NOT work
+
+The classic portable-C idiom `typedef char assert_name[(cond) ? 1 : -1];` (fails to
+compile if `cond` is false, because a negative array size is invalid) does **not**
+error in Oscar64 — confirmed by deliberately breaking a real condition (a struct-size
+check comparing `sizeof(struct)` against a wrong constant) and rebuilding: no error,
+no warning, build succeeds silently. This held even with an actual (unused) static
+instance of the typedef declared, not just the bare typedef — so it isn't simply
+"unused typedefs are never validated," Oscar64's array-bound checking in this context
+just doesn't reject the negative/absurd size at all.
+
+There is no working compile-time `_Static_assert`/`#error`-based struct-size check
+found for Oscar64 (no `_Static_assert` keyword, and `#if` cannot see `sizeof` of a
+type). **Verify struct/type sizes at runtime instead** — print `sizeof(x)` to the
+screen (or over serial/UCI) and check it against the expected value by eye/log, e.g.:
+```c
+sprintf(buf, "size: %u", (unsigned)sizeof(my_struct_t));
+screen_info(buf);
+```
+Cross-check any offset arithmetic independently too (e.g. in a scratch Python/shell
+script) rather than trusting a from-source struct layout alone, since there's no
+compiler-enforced safety net here.
+
 ### Native-mode preprocessor and expression gotchas
 
 **`#if MACRO` vs `#ifdef MACRO` with `-d` defines**

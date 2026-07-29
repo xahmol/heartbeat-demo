@@ -24,6 +24,7 @@
 #include "screen.h"
 #include "detect.h"
 #include "turbo.h"
+#include "hbplayer.h"
 
 #ifndef VERSION
 #define VERSION "v0.1.0-dev"
@@ -199,6 +200,38 @@ int main(void)
         strcpy(detail, "v");
         strcat(detail, vbuf);
         screen_result("Audio", 1, detail);
+    }
+
+    // ---- Heartbeat player: Phase 1 struct-size debug check ------
+    // Confirms the song-data / record structs are byte-exact against the
+    // Heartbeat file format offsets (see port plan §3a). Temporary — remove
+    // once Phase 2's loader can validate this against a real song instead.
+    {
+        char buf[40];
+        screen_blank_line();
+        screen_info("Heartbeat struct sizes:");
+        sprintf(buf, "  songdata  : %u (want 8192)", (unsigned)sizeof(hb_songdata_t));
+        screen_info(buf);
+        sprintf(buf, "  sample rec: %u (want 32)", (unsigned)sizeof(hb_sample_params_t));
+        screen_info(buf);
+        sprintf(buf, "  inst rec  : %u (want 64)", (unsigned)sizeof(hb_inst_params_t));
+        screen_info(buf);
+        sprintf(buf, "  state     : %u", (unsigned)sizeof(hb_state_t));
+        screen_info(buf);
+        sprintf(buf, "  sid chip  : %u", (unsigned)sizeof(hb_sid_chip_t));
+        screen_info(buf);
+        sprintf(buf, "  ua channel: %u", (unsigned)sizeof(hb_ua_channel_t));
+        screen_info(buf);
+
+        // Cross-check #embed content against a hex dump of the .bin files
+        // (bpmtable/bpmtable-ntsc/ultfreq/palfreq/ntscfreq first bytes)
+        {
+            unsigned char tb[5];
+            hb_debug_table_bytes(tb);
+            sprintf(buf, "  tables[0] : %02x %02x %02x %02x %02x",
+                    tb[0], tb[1], tb[2], tb[3], tb[4]);
+            screen_info(buf);
+        }
     }
 
     // ---- Detection complete ------------------------------------

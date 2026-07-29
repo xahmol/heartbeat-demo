@@ -63,7 +63,8 @@ ALLSRCS = $(MAINSRC) \
           include/turbo.c \
           include/audio.c \
           include/ultimate_common_lib.c \
-          include/ultimate_dos_lib.c
+          include/ultimate_dos_lib.c \
+          include/hbplayer.c
 
 # Output
 TARGET = build/$(MAIN).prg
