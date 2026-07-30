@@ -86,8 +86,8 @@ hardware, then **Save Settings** so it persists across reboots.
 
 ![Hardware detection screenshot](screenshots/detection.png)
 
-1. Build (see [Building from Source](#building-from-source)) or download a release
-   ZIP.
+1. Build (see [Building from Source](#building-from-source)) or download the
+   [latest release ZIP](https://github.com/xahmol/heartbeat-demo/releases/latest).
 2. Extract to the **root** of an SD card or USB drive — the ZIP contains the
    `idi8b/heartbeat-demo/` folder already, so extracting at the drive root creates
    the correct layout, including both bundled song files (see
@@ -341,7 +341,7 @@ if (hb_load("My Song.reu", 0x000000UL)) {
 
 ## Changelog
 
-### v1.0.1
+### [v1.0.1](https://github.com/xahmol/heartbeat-demo/releases/tag/v1.0.1)
 
 - Fixed `hb_irq`'s CIA1 (tick) branch running the full KERNAL keyboard-scan/
   jiffy-clock sequence at the ~195 Hz tick rate instead of never — caught in
@@ -354,7 +354,7 @@ if (hb_load("My Song.reu", 0x000000UL)) {
   that accepts the `C64U Turbo Registers` setting, not "the original
   Ultimate 64" as previously (incorrectly) stated.
 
-### v1.0.0
+### [v1.0.0](https://github.com/xahmol/heartbeat-demo/releases/tag/v1.0.0)
 
 Initial public release: full Heartbeat Soundtracker player port (all SID +
 Ultimate Audio channels, modulation, in-pattern track commands), the "wow
