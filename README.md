@@ -5,10 +5,12 @@ standalone player, for the Ultimate 64 — plus a hardware-verified demo that pl
 real Heartbeat song end-to-end: turbo mode, the 16 MB REU, and all 8 SID chips +
 7 Ultimate Audio DMA channels driven from a single tick IRQ.
 
-**Status: feature-complete.** All 10 phases of the port are done and
+**Status: v1.0.0, feature-complete.** All 10 phases of the port are done and
 hardware-verified — full song playback (tempo, all SID + Ultimate Audio channels,
-vibrato/PWM/filter sweep/portamento modulation, in-pattern track commands) plus a
-`buttons.s`-equivalent interactive test harness.
+vibrato/PWM/filter sweep/portamento modulation, in-pattern track commands), a
+`buttons.s`-equivalent interactive test harness, and a "wow factor" note visualiser
+(two-column VU meters, plasma background, spectroscope, sprite scrolltext) with
+in-demo switching between two bundled songs.
 
 ---
 
@@ -65,18 +67,36 @@ playback automatically.
 ## Note Visualiser and Test Harness Controls
 
 After hardware detection and song loading, press any key to switch to the note
-visualiser screen: a horizontal VU-meter bar per active channel (all 7 Ultimate
-Audio channels, plus 3 rows per populated SID chip), driven live from the player's
-visualizer event queue (`hb_vis_events[]` — see
+visualiser screen — a two-column VU-meter display (16 rows per column, enough to
+show all 31 possible channels: all 7 Ultimate Audio channels plus 3 rows per
+populated SID chip, up to 8 chips) driven live from the player's visualizer event
+queue (`hb_vis_events[]` — see
 [`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md#visualizer-hooks)). Each
 channel's bar jumps to peak brightness on a note-on and decays smoothly until the
-next one, with a green/yellow/red gradient by loudness.
+next one, with a green/yellow/red gradient by loudness and smooth sub-character
+fill glyphs at the bar's fractional edge.
+
+A few more "wow factor" layers run alongside the bars, all sharing the same live
+event data:
+
+- **Plasma background** — a cool blue/purple/cyan/white interference pattern
+  animates behind both columns every frame; bars visually "eat into" it as their
+  level rises rather than masking it with a flat fill.
+- **Spectroscope** — a 3-row stylized pitch histogram below the bars, bucketing
+  every note event across the screen width (not a real FFT — there's no audio
+  sampling to analyze — but it genuinely reacts to whatever's playing).
+- **Sprite scrolltext** — an 8-sprite scrolling message (hedning's "Sprite Font",
+  see [Credits](#credits)) spreads across the full screen width, sine-rippling
+  per letter and slowly bouncing vertically across the whole bar area. Each
+  letter keeps one color for its entire time on screen; only a newly-revealed
+  letter gets the next color in the gradient.
 
 A `buttons.s`-equivalent interactive test harness is active on this same screen:
 
 | Key | Action |
 |---|---|
 | `SPACE` | Restart the song from the beginning |
+| `S` | Switch to the other song (see [Credits](#credits) for the two songs bundled with this demo) |
 | `RUN/STOP` | Silence all sound |
 | `A`-`O` | Manually trigger sample FX 1-15 at C-4 on Ultimate Audio channel 6 |
 | `X` | Stop the FX channel (6) |
@@ -105,17 +125,31 @@ A PDF of this README is included in release ZIPs (`README.pdf`, regenerated via
 
 ## Memory Map
 
-Runtime layout for the compiled binary (Oscar64, VIC bank 0, `$01=$36` — KERNAL +
-I/O visible, BASIC ROM removed). Exact section sizes shift per build; check
-`build/heartbeat-demo.map` for the current binary.
+Runtime layout for the compiled binary (Oscar64, `$01=$36` — KERNAL + I/O visible,
+BASIC ROM removed). Exact section sizes shift per build; check
+`build/heartbeat-demo.map` for the current binary — in particular re-check `BSSEnd`
+against the `main` region's own end address after any change that adds a
+meaningfully-sized new global, since the margin has been tight before.
 
 ### Program sections
+
+The detection screen (VIC bank 0) and the note visualiser (VIC bank 2) are two
+separate screens that are never active at the same time, each with its own
+region reserved so the linker can never place ordinary code/data/bss there —
+see the extensive comment on the region pragmas in `src/main.c` for why this
+split exists (a real bug was found and fixed where it didn't).
 
 | Range | Contents |
 |-------|----------|
 | `$0801`-`$0852` | Oscar64 BASIC bootstrap (`SYS` stub) |
-| `$0400`-`$07FF` | Text screen RAM (VIC bank 0, 40×25 chars) |
-| `$0A00`-`$BFFF` | Code + data + BSS + heap + stack (single build region, see `#pragma region` in `src/main.c`) |
+| `$0400`-`$07FF` | Detection screen RAM (VIC bank 0, 40×25 chars; charset read via the hardware char-ROM shadow at `$1800`, no RAM copy needed) |
+| `$0A00`-`$9980` | Code + data + BSS (`main` region) |
+| `$9980`-`$9A80` | Heap (`rheap` region, `heapsize(256)`) |
+| `$9A80`-`$9E80` | Stack (`rstack` region, `stacksize(0x400)`) |
+| `$9E80`-`$A000` | Unused (rounding leftover) |
+| `$A000`-`$A3E7` | Visualiser screen RAM (VIC bank 2) |
+| `$A800`-`$AFFF` | Visualiser custom charset (256 chars × 8 bytes — a RAM copy of the char ROM's lowercase/uppercase set, plus custom sub-character fill glyphs at codes `$60`-`$66`) |
+| `$B000`-`$BFFF` | Visualiser sprite font data (64 sprites × 64 bytes) |
 
 ### I/O region (`$D000`-`$DFFF` at `$01=$36`)
 
@@ -135,6 +169,11 @@ I/O visible, BASIC ROM removed). Exact section sizes shift per build; check
 |---------|-------|--------|
 | `$0310` | `$60` (RTS) | Stub target for KERNAL UDTIM hook redirects |
 | `$A002`:`$A003` | `$10 $03` | Redirects KERNAL `JMP ($A002)` to the RTS stub at `$0310` — prevents the KERNAL IRQ chain from calling BASIC ROM code at an address that's now DRAM, not ROM, under `MMAP_NO_BASIC` |
+
+The visualiser's screen RAM (`$A000`-`$A3E7`, above) overlaps this exact `$A002`/
+`$A003` patch. That's safe only because `hb_init()` permanently replaces the KERNAL
+IRQ vector before the visualiser ever initializes and nothing restores it — see the
+note in `src/main.c` right after this patch if that invariant ever needs to change.
 
 ### Player runtime state and embedded tables
 
@@ -157,6 +196,15 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md#2-memory-layout) for the full breakdown 
   redistributed with permission — see [`NOTICE.md`](NOTICE.md)
 - **UCI/DOS library:** Scott Hutter & Francesco Sblendorio
 - **Compiler:** [Oscar64](https://github.com/drmortalwombat/oscar64) by drmortalwombat
+- **Sprite scroller font:** ["Sprite Font"](https://c64gfx.com/image/9998103) by
+  hedning, from the demo *World in Progress* (1st place, Mixed category, Syntax
+  Society Summerparty 2012)
+- **Songs** — neither is covered by this project's own GPL-3 license; see
+  [`NOTICE.md`](NOTICE.md#song-files-assetsreu) for the full notice:
+  - "Maniac" (Michael Sembello, from *Flashdance*, 1983), arranged by Xander Mol
+  - *Knight Rider* theme (Glen A. Larson / Stu Phillips), arranged by Aleksi
+    Eeben and bundled as example content with Heartbeat Soundtracker's own
+    public evaluation release
 
 ---
 

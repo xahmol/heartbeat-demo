@@ -17,8 +17,18 @@ void visualizer_run(void);
 // Switches to the visualiser's own screen (clears, draws header/labels/
 // footer instructions), then loops once per VIC frame -- decaying and
 // redrawing every channel's bar, and polling the same buttons.s key
-// bindings the test harness always had (SPACE/RUN-STOP/A-O/X) -- until
-// RETURN is pressed, at which point it returns to the caller.
+// bindings the test harness always had (SPACE/RUN-STOP/A-O/X), plus 'S' to
+// switch songs -- until RETURN is pressed, at which point it returns to
+// the caller.
+
+// Song table shared with main.c (which loads vis_song_files[vis_song_index]
+// at startup, index 0, before the visualiser's own 'S' key can switch it).
+// Filenames need the raw-ASCII bytes UCI's filesystem protocol expects --
+// see visualizer.c's identity-charmap wrapping around the definition.
+#define VIS_NUM_SONGS 2
+extern char vis_song_files[VIS_NUM_SONGS][24];
+extern const char *const vis_song_names[VIS_NUM_SONGS];
+extern unsigned char vis_song_index;
 
 #pragma compile("visualizer.c")
 

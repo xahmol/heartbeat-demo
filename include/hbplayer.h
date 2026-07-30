@@ -111,6 +111,12 @@ typedef struct {
 #define HB_SONGDATA_SIZE  0x2000UL
 #define HB_SONGDATA_REU_SRC_DEFAULT_OFFSET 0x00E000UL // fixed offset within the .reu file's REU image, per main.s
 
+// REU base address every song is loaded to via hb_load() -- shared between
+// main.c's initial startup load and visualizer.c's runtime song-switch
+// reload (same address is reused/overwritten each time; only one song is
+// ever resident at once).
+#define HB_SONG_REU_BASE  0x000000UL
+
 // ---------------------------------------------------------------
 // Player-internal working state — freely designed (NOT part of the file
 // format; re-initialized fresh at hb_init(), matching InitSIDImageAndVolumes).

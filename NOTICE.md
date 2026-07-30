@@ -33,11 +33,12 @@ original or GPL-3-licensed works.
 
 - **`Knight Rider Theme.reu`** — a Heartbeat Soundtracker arrangement of the
   *Knight Rider* TV theme (composed by Glen A. Larson / Stu Phillips; ©
-  Universal Studios). This specific `.reu` is bundled as example/demo content
-  with Heartbeat Soundtracker's own public evaluation release, so it is
-  already publicly distributed by the tracker's author — included here on
-  that same basis, as demo material for this player, not as an original
-  composition of this project.
+  Universal Studios), arranged by Aleksi Eeben, Heartbeat Soundtracker's own
+  creator — not by this project or its owner. This specific `.reu` is bundled
+  as example/demo content with Heartbeat Soundtracker's own public evaluation
+  release, so it is already publicly distributed by the tracker's author —
+  included here on that same basis, as demo material for this player, not as
+  an original composition of this project.
 - **`maniac.reu`** — Xander Mol's own Heartbeat Soundtracker arrangement of
   "Maniac" (Michael Sembello, from *Flashdance*, 1983). Also demo content,
   not an original composition, and not GPL-3-licensed.

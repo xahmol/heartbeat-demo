@@ -6,18 +6,21 @@
 // manually-placed VIC bank 2 screen/charset/sprite data (src/visualizer.c,
 // $A000-$BFFF) can never collide with ordinary code/data/bss/heap/stack:
 //
-//   - $0A00-$9400: normal code+data+bss (measured usage ~34.5KB with the
-//     full visualiser -- fill/plasma/spectroscope/scroller -- built in;
-//     this leaves a few hundred bytes of headroom, verify against
-//     build/*.map's BSSEnd after any change that adds meaningfully-sized
-//     new statics).
-//   - $9400-$9500: heap (heapsize(256) below).
-//   - $9500-$9900: stack (stacksize(0x400) below).
-//   - $9900-$A000: unused gap (kept clear of the $9000-$9FFF hardware
-//     character-ROM-shadow range on principle, even though CPU-side
-//     code/data placement there is actually safe -- only VIC char/bitmap
-//     FETCHES are shadowed, not general RAM access).
+//   - $0A00-$9980: normal code+data+bss (measured usage ~34.5KB and growing
+//     as the visualiser gains features -- verify against build/*.map's
+//     BSSEnd after any change that adds meaningfully-sized new statics; the
+//     margin has been tight before, see git history).
+//   - $9980-$9A80: heap (heapsize(256) below).
+//   - $9A80-$9E80: stack (stacksize(0x400) below).
+//   - $9E80-$A000: small unused gap (384 bytes, rounding leftover).
 //   - $A000-$BFFF: reserved here, used directly by visualizer.c.
+//
+// $9000-$9FFF (part of `main` and the heap/stack regions above) is the VIC
+// character-ROM-shadow range, but that only affects the VIC chip's OWN
+// char/bitmap fetches when bank 0 or 2 is selected -- ordinary CPU code/
+// data placement there is unaffected and safe, which is why `main` is
+// allowed to extend through it instead of stopping at $8FFF like an
+// earlier, overly-conservative version of this layout did.
 //
 // This fixes a real, confirmed bug: with a single undivided region, Oscar64
 // happily placed ordinary BSS globals (hb_sids -- live SID channel state,
@@ -38,9 +41,9 @@
 // was in fact no genuinely free window anywhere in $8000-$BFFF at all, only
 // the small explicit heap/stack regions below plus $A000-$BFFF freed up by
 // excluding it from `main` altogether.
-#pragma region(main,  0x0A00, 0x9400, , , {code, data, bss})
-#pragma region(rheap, 0x9400, 0x9500, , , {heap})
-#pragma region(rstack, 0x9500, 0x9900, , , {stack})
+#pragma region(main,  0x0A00, 0x9980, , , {code, data, bss})
+#pragma region(rheap, 0x9980, 0x9A80, , , {heap})
+#pragma region(rstack, 0x9A80, 0x9E80, , , {stack})
 #pragma heapsize(256)
 // Explicit stack size: without this, Oscar64 defaults to filling ALL
 // remaining region space with the stack (observed: stack reserved from
@@ -79,16 +82,11 @@
 #define VERSION "v0.1.0-dev"
 #endif
 
-// Heartbeat test song filename, on any SD/USB drive's idi8b/heartbeat-demo/
+// Heartbeat test song filenames, on any SD/USB drive's idi8b/heartbeat-demo/
 // (see Makefile's INSTALL_PATH — must match hb_load()'s internal search path).
-// Identity charmap override: petscii.h's global charmap would otherwise remap
-// these path bytes to the wrong PETSCII case for UCI's raw-ASCII filesystem protocol.
-#pragma charmap(97, 97, 26)   // a-z -> a-z (identity, overrides petscii.h)
-#pragma charmap(65, 65, 26)   // A-Z -> A-Z (identity)
-static char hb_song_file[] = "maniac.reu";
-#pragma charmap(97, 65, 26)   // restore petscii.h: a-z -> A-Z
-#pragma charmap(65, 97, 26)   // restore petscii.h: A-Z -> a-z
-#define HB_SONG_REU_BASE  0x000000UL
+// vis_song_files[]/vis_song_index (visualizer.h) are the shared song table;
+// this loads index 0 at startup. HB_SONG_REU_BASE is in hbplayer.h (shared
+// with visualizer.c's runtime song-switch reload).
 
 // ---------------------------------------------------------------
 // Helpers
@@ -166,6 +164,16 @@ int main(void)
     // (already RTS) so JMP ($A002) returns harmlessly via the RTS stub.
     *((unsigned char *)0xA002) = 0x10;  // lo byte of $0310
     *((unsigned char *)0xA003) = 0x03;  // hi byte of $0310
+
+    // NOTE: visualizer.c's screen memory sits at $A000-$A3E7, overlapping
+    // this exact $A002/$A003 patch -- safe ONLY because hb_init() (called
+    // once, before the visualiser screen ever initializes) permanently
+    // replaces the KERNAL IRQ vector at $0314/$0315 with hb_irq and nothing
+    // ever restores it, so the KERNAL's own UDTIM/JMP($A002) path never
+    // executes again after that point. If any future change reinstalls the
+    // default KERNAL IRQ vector after hb_init() (e.g. for a return-to-BASIC
+    // path that doesn't just reset the machine), this stops being true and
+    // $A002/$A003 must be re-verified before touching this screen address.
 
     // Reset CIA1 Timer A to 50 Hz PAL keyboard scan rate.
     cia1.icr = 0x7F;       // mask all CIA1 interrupts
@@ -270,7 +278,7 @@ int main(void)
         char song_loaded;
         screen_info("Loading Heartbeat song...");
 
-        song_loaded = hb_load(hb_song_file, HB_SONG_REU_BASE);
+        song_loaded = hb_load(vis_song_files[vis_song_index], HB_SONG_REU_BASE);
         if (song_loaded)
         {
             sprintf(buf, "tempo %u, %u SIDs",
