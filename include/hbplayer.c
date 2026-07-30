@@ -564,13 +564,21 @@ __interrupt void hb_tick(void)
 // The reference enables BOTH a raster IRQ (fixed line, independent of
 // tempo) and the CIA1 Timer A IRQ (tempo-dependent tick rate) at the same
 // time: the raster IRQ's only job is guaranteed ~50Hz keyboard scanning
-// (SCNKEY) regardless of how slow the current BPM's tick rate is, while
-// the CIA branch runs the real player update. The reference chains both
-// branches to $EA81 (a KERNAL entry point *past* its own internal SCNKEY
-// call, skipping a double-scan against the raster branch's manual SCNKEY).
+// regardless of how slow the current BPM's tick rate is, while the CIA
+// branch runs the real player update. Checked against the reference source
+// directly (player.s's own PlayerIRQ): its CIA branch runs PlayerUpdate,
+// acks the IRQ, then jumps STRAIGHT to $EA81 -- no SCNKEY, no jiffy-clock
+// update, nothing else -- while its raster branch does an explicit
+// `jsr SCNKEY` of its own BEFORE also reaching $EA81. So in the original,
+// keyboard scanning (and whatever jiffy-clock/STOP-key logic $EA31 itself
+// covers ahead of $EA81) happens ONLY from the raster branch, at its fixed
+// ~50/60Hz rate -- never from the CIA branch, which fires at the tick rate
+// (~195Hz here).
 //
-// PORT DEVIATION (hardware-tested): chaining to $EA81 here causes hb_tick
-// to stop being invoked after only ~2 firings (confirmed via
+// PORT DEVIATION #1 (hardware-tested): chaining the RASTER branch to $EA81
+// (matching the reference) is fine on this hardware. But the ORIGINAL
+// attempt at porting this chained the CIA (tick) branch to $EA81 too, which
+// causes hb_tick to stop being invoked after only ~2 firings (confirmed via
 // a free-running debug counter that should climb continuously but instead
 // plateaus within milliseconds) -- with no crash and the keyboard still
 // responding, consistent with hitting an unprotected KERNAL/BASIC-ROM-
@@ -578,13 +586,33 @@ __interrupt void hb_tick(void)
 // isn't covered by main.c's existing $0310/$A002 UDTIM/CBINV safety
 // patches (those patches were written for -- and documented against --
 // $EA31's specific call chain, per main.c's own comments, not $EA81's).
-// Switched both branches to $EA31 instead, matching the already-proven,
-// already-hardware-verified pattern this project's main.c is designed
-// around (see UltimateDemo2026/include/modplay.c's modplay_irq, which
-// uses the same target). Accepted tradeoff: both branches now scan the
-// keyboard (redundant, but harmless -- cheap at 64 MHz turbo), so the
-// manual SCNKEY call in the raster branch is removed (chaining to $EA31
-// already does it).
+//
+// The FIRST fix tried was chaining BOTH branches to $EA31 instead (matching
+// UltimateDemo2026/include/modplay.c's modplay_irq, which uses the same
+// target) -- this does keep hb_tick firing correctly, but introduces a
+// real regression the reference author caught during review: $EA31 is a
+// much earlier, fuller KERNAL entry point than $EA81 (jiffy-clock update,
+// STOP-key check, THEN falls through into its own SCNKEY call) -- chaining
+// the CIA branch to it means the full keyboard-scan/jiffy-clock sequence
+// now runs at the ~195Hz TICK rate instead of never (as in the reference)
+// or the intended ~50/60Hz RASTER rate. Symptom: key repeat feels roughly
+// 4x too fast, plus wasted cycles re-scanning the keyboard far more often
+// than needed (cheap at 64MHz turbo, but still not what the reference
+// design intends).
+//
+// PORT DEVIATION #2 (current, hardware-tested): the CIA (tick) branch now
+// bypasses the KERNAL IRQ tail ENTIRELY instead of chaining to $EA31 or
+// $EA81 -- acks the CIA1 IRQ, then restores A/X/Y itself (in the exact
+// order the KERNAL's own hardware IRQ entry at $FF48 pushed them: Y last on
+// top, so PLA/TAY pops it first, then PLA/TAX, then a final PLA restores A)
+// and RTIs directly. This sidesteps whatever $EA81-specific problem broke
+// hb_tick in deviation #1 (since that KERNAL path is never reached at all
+// from this branch any more) while also matching the reference's actual
+// intent: the tick branch never touches SCNKEY or jiffy-clock/STOP-key
+// logic, only the raster branch does, at its own fixed rate. The RASTER
+// branch is unchanged -- still chains to $EA31 (its own internal SCNKEY
+// covers keyboard scanning at the raster IRQ's fixed rate; no separate
+// `jsr SCNKEY` needed, unlike the reference's $EA81-targeting version).
 //
 // Per the "named asm blocks are addresses, not callables" rule (see
 // oscar64manual.md), this is installed via `*((void**)0x0314) = hb_irq;`,
@@ -628,7 +656,18 @@ __asm hb_irq
     pla
     sta $02
     lda $dc0d           // read CIA1 ICR -- acknowledges Timer A IRQ (clear-on-read)
-    jmp $ea31
+
+    // Bypass the KERNAL IRQ tail entirely: restore A/X/Y in the exact
+    // order the KERNAL's own hardware IRQ entry ($FF48) pushed them
+    // (A, then X, then Y -- so Y is on top of the stack here) and RTI
+    // directly. See this function's own comment (PORT DEVIATION #2) for
+    // why -- neither $EA31 nor $EA81 is used on this branch.
+    pla
+    tay
+    pla
+    tax
+    pla
+    rti
 
 hb_irq_raster:
     sta $d019           // acknowledge raster IRQ
