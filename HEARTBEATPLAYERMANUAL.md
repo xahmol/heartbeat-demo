@@ -167,6 +167,52 @@ Fetches the next pattern row into `hb_row_buf` via REU streaming, advancing the
 sequencer/pattern pointers as needed. Called internally by the tick dispatch; only
 useful to call directly for diagnostics (e.g. printing raw row bytes).
 
+### `void hb_vis_reset(void)`
+
+Clears the visualizer event queue (`hb_vis_events[]`) and resets
+`hb_vis_event_count` to 0. Not called internally by the player — call it from your
+own code when switching visualizer modes or restarting the song, if you want a
+clean slate rather than waiting for the next tick's natural reset.
+
+### Visualizer hooks
+
+Port of the original's `visualizerout` block — every SID and Ultimate Audio note
+trigger populates a rolling queue of `(note, sound, channel, velocity)` events,
+reset at the start of every tick (`hb_state.play_mode` doesn't matter — the queue
+resets even when playback is fully off).
+
+```c
+#define HB_VIS_MAX_EVENTS 32
+
+typedef struct {
+    unsigned char note;
+    unsigned char sound;
+    unsigned char velocity;  // 0-63 perceptual loudness estimate, not a raw register
+    unsigned char channel;   // 0-6 = UA channels, 7-30 = SID channels
+} hb_vis_event_t;
+
+extern hb_vis_event_t hb_vis_events[HB_VIS_MAX_EVENTS];
+extern unsigned char  hb_vis_event_count; // valid entries this tick
+```
+
+**Read this once per your own update cycle** (e.g. once per VIC frame), not once
+per tick — ticks fire far faster (~195 Hz) than any practical redraw rate, so
+`hb_vis_events[0 .. hb_vis_event_count-1]` is a **per-tick snapshot that gets
+overwritten on the next tick**, not a history buffer. A visualizer wanting smooth
+VU-meter-style decay needs to accumulate/decay values itself across reads.
+
+SID channel numbers: `7 + sid_idx*3 + ch_idx` (so chip 0's 3 channels are 7, 8, 9;
+chip 1's are 10, 11, 12; and so on). UA channels use their own index (0-6)
+directly. `velocity` comes from the channel's ADSR envelope nibbles via a
+perceptual-loudness heuristic (attack/decay/sustain/release weighted and clamped
+to 0-63) — see `hb_vis_adsr_weight()` in `hbplayer.c` if you need the exact
+formula.
+
+`hb_vis_sound` for Ultimate Audio channels is **not** the sample number directly —
+the original reverses it (`sound_out = ~(sound_in - 1) & 0x3F, then +1`), a
+display/palette convention with no further documented rationale, ported literally.
+SID channels store the sample/instrument number as-is.
+
 ### Globals
 
 | Symbol | Purpose |
@@ -177,8 +223,10 @@ useful to call directly for diagnostics (e.g. printing raw row bytes).
 | `hb_sids[HB_MAX_SIDS]` | Per-SID-chip working state (filter, 3× per-channel state) — see [§5](#5-player-internal-state). |
 | `hb_ua[HB_UA_CHANNELS]` | Per-Ultimate-Audio-channel working state — see [§5](#5-player-internal-state). |
 | `hb_ext_out` | Sync-output byte written by the `Xt` command (nonzero param) — poll this from your own code to react to music-synced cues. Never cleared automatically. |
+| `hb_vis_events[HB_VIS_MAX_EVENTS]` / `hb_vis_event_count` | The visualizer event queue — see above. |
 
-`HB_MAX_SIDS` = 8, `HB_UA_CHANNELS` = 7 (fixed by Ultimate Audio hardware).
+`HB_MAX_SIDS` = 8, `HB_UA_CHANNELS` = 7 (fixed by Ultimate Audio hardware),
+`HB_VIS_MAX_EVENTS` = 32.
 
 ---
 

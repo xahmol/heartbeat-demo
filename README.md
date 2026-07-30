@@ -16,7 +16,7 @@ vibrato/PWM/filter sweep/portamento modulation, in-pattern track commands) plus 
 
 1. [Requirements](#requirements)
 2. [Installation](#installation)
-3. [Test Harness Controls](#test-harness-controls)
+3. [Note Visualiser and Test Harness Controls](#note-visualiser-and-test-harness-controls)
 4. [Documentation](#documentation)
 5. [Memory Map](#memory-map)
 6. [Credits](#credits)
@@ -62,10 +62,17 @@ playback automatically.
 
 ---
 
-## Test Harness Controls
+## Note Visualiser and Test Harness Controls
 
-Once the song starts playing, a `buttons.s`-equivalent interactive test harness is
-active:
+After hardware detection and song loading, press any key to switch to the note
+visualiser screen: a horizontal VU-meter bar per active channel (all 7 Ultimate
+Audio channels, plus 3 rows per populated SID chip), driven live from the player's
+visualizer event queue (`hb_vis_events[]` — see
+[`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md#visualizer-hooks)). Each
+channel's bar jumps to peak brightness on a note-on and decays smoothly until the
+next one, with a green/yellow/red gradient by loudness.
+
+A `buttons.s`-equivalent interactive test harness is active on this same screen:
 
 | Key | Action |
 |---|---|
@@ -73,7 +80,7 @@ active:
 | `RUN/STOP` | Silence all sound |
 | `A`-`O` | Manually trigger sample FX 1-15 at C-4 on Ultimate Audio channel 6 |
 | `X` | Stop the FX channel (6) |
-| `RETURN` | Exit the harness, return to BASIC |
+| `RETURN` | Exit to BASIC |
 
 If the letter keys don't seem to respond, check that Shift Lock isn't engaged.
 

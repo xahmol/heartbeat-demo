@@ -28,9 +28,12 @@ static inline char p2s(char ch)
 }
 
 // ---------------------------------------------------------------
-// Internal: draw one reversed-video header line.
+// screen_header_line — draw one reversed-video, centered header line.
+// Exported (not just screen_init()'s internal helper) so other screens
+// (e.g. src/visualizer.c) can draw a matching header without duplicating
+// the p2s/reverse-video-bit logic.
 // ---------------------------------------------------------------
-static void header_line(char row, const char *text, char color) {
+void screen_header_line(char row, const char *text, char color) {
     char buf[41];
     char len = (char)strlen(text);
     char start = (char)((40 - len) / 2);
@@ -59,8 +62,8 @@ void screen_init(const char *subtitle) {
     cwin_clear(&cw);
 
     // With petscii.h: source mixed-case → correct mixed-case display
-    header_line(0, "heartbeat-demo", COL_HEADER1);
-    header_line(1, subtitle,         COL_HEADER2);
+    screen_header_line(0, "heartbeat-demo", COL_HEADER1);
+    screen_header_line(1, subtitle,         COL_HEADER2);
 
     cwin_cursor_move(&cw, 0, 3);
 }

@@ -40,6 +40,12 @@
 #define COL_SUCCESS      VCOL_LT_GREEN
 #define COL_KEY          VCOL_WHITE
 
+// Note visualiser (src/visualizer.c) palette
+#define COL_VIS_LABEL    VCOL_WHITE
+#define COL_VIS_BAR_LOW  VCOL_GREEN   // bar fill, bottom ~60% of a row's width
+#define COL_VIS_BAR_MID  VCOL_YELLOW  // bar fill, next ~25%
+#define COL_VIS_BAR_HIGH VCOL_RED     // bar fill, top ~15%
+
 // ---------------------------------------------------------------
 // Global CharWin — declared in screen.c, used everywhere
 // ---------------------------------------------------------------

@@ -14,6 +14,12 @@ void screen_init(const char *title);
 // Initialise VIC text mode, clear screen, draw two-line header.
 // title: subtitle shown on header line 1.
 
+void screen_header_line(char row, const char *text, char color);
+// Draw one reversed-video, centered header line at the given row (used by
+// screen_init() for its own two-line header; exported so other screens,
+// e.g. src/visualizer.c, can draw a matching header without duplicating
+// the underlying p2s/reverse-video-bit logic).
+
 void screen_result(const char *label, char ok, const char *detail);
 // Print one detection result line:
 //   "  LABEL : [ OK ] detail"   (COL_OK badge, COL_DETAIL_OK text)

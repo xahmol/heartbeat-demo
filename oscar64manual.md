@@ -838,6 +838,31 @@ void cwin_console_printf(CharWin *w, const char *fmt, ...);
 void cwin_console_edit_line(CharWin *w, char *buf, byte len);
 ```
 
+### `cwin_put*`/`cwin_putat*` (non-`_raw`) apply PETSCII conversion to the `ch` argument too, not just to strings
+
+The non-`_raw` `cwin_put_char`/`cwin_putat_char` family runs their single-character
+`ch` argument through the *same* runtime PETSCII→screencode conversion
+(`ch ^ p2smap[ch>>5]`, internal to `charwin.c`) used for string functions. This is
+easy to miss because it's natural to assume a single "character" argument is a raw
+screen code you're placing directly — it isn't, unless you use the `_raw` variant.
+
+Confirmed the hard way: a VU-meter bar renderer passed a literal, already-final
+screen code (`0xA0`, a solid reverse-video block) directly to `cwin_putat_char()`
+expecting it to appear as-is. It silently became `0x60` (an unrelated glyph)
+instead — reading live screen RAM on real hardware while the bug was present
+showed the corrupted byte directly, confirming the conversion was the cause, not a
+drawing-coordinate or color bug. The fix was switching to `cwin_putat_char_raw()`,
+which passes `ch` straight through.
+
+**Rule of thumb**: if the value you're writing is already a real screen code (a
+constant like a project's own `SC_SPACE`/`SC_REVSPACE`, or something read back via
+`cwin_getat_char_raw()`), use the `_raw` function. Only use the non-raw variant for
+values that are genuinely still in "PETSCII source" form and need the conversion —
+e.g. characters coming straight from a C string literal or `sprintf()` output. This
+project's own `screen.c` (`header_line()`/`screen_header_line()`) already worked
+around this correctly for its reverse-video header bars; it just wasn't obvious
+that the same trap applies to plain non-reversed literal screencodes too.
+
 ### `kernalio.h` — Kernal File I/O
 
 ```c

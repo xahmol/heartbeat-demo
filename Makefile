@@ -60,6 +60,7 @@ MAINSRC = src/main.c
 ALLSRCS = $(MAINSRC) \
           src/screen.c \
           src/detect.c \
+          src/visualizer.c \
           include/turbo.c \
           include/audio.c \
           include/ultimate_common_lib.c \
@@ -73,8 +74,10 @@ TARGET = build/$(MAIN).prg
 
 # Heartbeat test song, deployed alongside the .prg (not committed to git —
 # large binary test asset, see .gitignore). Must match hb_song_file[] in
-# src/main.c.
-SONGFILE = assets/Knight Rider Theme.reu
+# src/main.c. Currently the project owner's own work-in-progress song
+# (assets/Knight Rider Theme.reu is kept as the original reference test
+# song used throughout the player port's development/verification).
+SONGFILE = assets/maniac.reu
 
 # Demo install path on SD/USB (must match demo_path[] in src/main.c once used)
 INSTALL_PATH = idi8b/heartbeat-demo

@@ -104,10 +104,9 @@ typedef struct {
 // NOT work on Oscar64 — confirmed by deliberately breaking the size and
 // rebuilding: no error, no warning. Oscar64's array-bound check does not
 // reject negative/absurd sizes in this context (even with a real instance
-// declared, not just a typedef). Struct-size verification for this project
-// is therefore done at RUNTIME (see src/main.c's Phase 1 debug printout of
-// sizeof(hb_songdata_t) etc.), not at compile time. See oscar64manual.md's
-// gotcha list.
+// declared, not just a typedef). If this struct's layout is ever changed,
+// verify sizeof(hb_songdata_t) at runtime (e.g. a one-off printf) rather
+// than trusting a compile-time check — see oscar64manual.md's gotcha list.
 
 #define HB_SONGDATA_SIZE  0x2000UL
 #define HB_SONGDATA_REU_SRC_DEFAULT_OFFSET 0x00E000UL // fixed offset within the .reu file's REU image, per main.s
@@ -246,20 +245,62 @@ void hb_stop_fx(unsigned char ch);
 
 void hb_fetch_pattern_row(void);
 // FetchPatternRow port: fetches the next pattern row into hb_row_buf via
-// reu_fetch(), advancing the sequencer/pattern pointers as needed. Not
-// yet wired into hb_tick's real dispatch (Phase 5 scope) -- see hbplayer.c.
+// reu_fetch(), advancing the sequencer/pattern pointers as needed. Called
+// internally by hb_tick's dispatch (ahead of a hard-restart); exposed here
+// mainly for diagnostics (e.g. printing raw row bytes).
 
 extern hb_songdata_t hb_songdata;
-
-// Phase-4-only debug counter -- see hbplayer.c's hb_tick(). Remove once
-// Phase 5 lands.
-extern unsigned int hb_debug_tick_count;
 
 // Xt track command's sync-output byte (ExtOut in the original): the Xt
 // command with a nonzero parameter writes that byte here instead of
 // killing the channel -- intended for a demo to poll and react to
 // music-synced cues. Never cleared automatically; matches the original.
 extern unsigned char hb_ext_out;
+
+// ---------------------------------------------------------------
+// Visualizer hooks -- port of player.s's "visualizerout" block
+// (SIDNote/SIDVelocity/SIDHalfVelocity/SampleNote/SampleVelocity/Reset).
+// Populates a queue of (note, sound, channel, velocity) tuples every time
+// a note triggers on any SID or Ultimate Audio channel.
+//
+// UNLIKE the original's VisualizerFrameInit (which resets the queue at
+// the start of every TICK, ~195 Hz -- correct there because the original's
+// visualizer is assumed to consume it synchronously within the same
+// tick), THIS port's hb_tick() never resets the queue itself: events
+// accumulate (wrapping back to index 0 past HB_VIS_MAX_EVENTS) until
+// whoever is reading it -- typically a main-loop visualizer polling once
+// per VIC frame, i.e. roughly once every 4 ticks -- resets
+// hb_vis_event_count back to 0 after taking its own snapshot. Resetting
+// every tick as the original does would wipe out almost every event
+// before a ~50 Hz poll ever saw it, since notes only trigger roughly once
+// per pattern row (~every 20-25 ticks), not every tick. See
+// src/visualizer.c's hb_vis_decay_and_draw()-equivalent for the reference
+// consumer pattern: snapshot `count = hb_vis_event_count`, immediately
+// reset `hb_vis_event_count = 0`, then process `hb_vis_events[0..count-1]`.
+//
+// Channel numbering matches the original: 0-6 = Ultimate Audio channels
+// (direct channel index), 7-30 = SID channels (7 + sid_idx*3 + ch_idx).
+// `velocity` is a 0-63 perceptual loudness estimate derived from the
+// channel's ADSR envelope (see hbplayer.c's hb_vis_adsr_weight()), not a
+// literal register value.
+// ---------------------------------------------------------------
+#define HB_VIS_MAX_EVENTS 32
+
+typedef struct {
+    unsigned char note;
+    unsigned char sound;
+    unsigned char velocity;
+    unsigned char channel;
+} hb_vis_event_t;
+
+extern hb_vis_event_t hb_vis_events[HB_VIS_MAX_EVENTS];
+extern unsigned char hb_vis_event_count; // valid entries in hb_vis_events since the last consumer reset
+
+void hb_vis_reset(void);
+// Clears the entire event queue and resets the count to 0. Not called
+// internally by the player (matches the original -- VisualizerReset has
+// no internal caller in player.s either) -- for a visualizer to call e.g.
+// when switching modes or restarting the song.
 
 #pragma compile("hbplayer.c")
 

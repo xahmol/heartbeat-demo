@@ -73,6 +73,142 @@ unsigned char     hb_row_buf[64];
 hb_sid_chip_t     hb_sids[HB_MAX_SIDS];
 hb_ua_channel_t   hb_ua[HB_UA_CHANNELS];
 
+hb_vis_event_t    hb_vis_events[HB_VIS_MAX_EVENTS];
+unsigned char     hb_vis_event_count;
+
+// =================================================================
+// Visualizer hooks -- port of player.s's "visualizerout" block
+// (VisualizerFrameInit/SIDNote/SIDVelocity/SIDHalfVelocity/SampleNote/
+// SampleVelocity/Reset, player.s lines ~2500-2730). See hbplayer.h's
+// comment on hb_vis_events for the queue's semantics and channel
+// numbering.
+// =================================================================
+
+void hb_vis_reset(void)
+{
+    unsigned char i;
+    for (i = 0; i < HB_VIS_MAX_EVENTS; i++)
+    {
+        hb_vis_events[i].note = 0;
+        hb_vis_events[i].sound = 0;
+        hb_vis_events[i].velocity = 0;
+        hb_vis_events[i].channel = 0;
+    }
+    hb_vis_event_count = 0;
+}
+
+// ---------------------------------------------------------------
+// hb_vis_adsr_weight — port of ADSRWeight: a perceptual "how loud does
+// this envelope sound" heuristic from the attack/decay/sustain/release
+// nibbles, clamped to 0-63. Verified to never overflow 8 bits at any
+// intermediate step (max possible value before the final clamp is 165),
+// so this is safe as plain unsigned char arithmetic with no wraparound
+// concerns, unlike some of this port's other ported arithmetic.
+// ---------------------------------------------------------------
+static unsigned char hb_vis_adsr_weight(unsigned char sr, unsigned char ad)
+{
+    unsigned char att = (unsigned char)(ad >> 4);
+    unsigned char dec = (unsigned char)(ad & 0x0F);
+    unsigned char sus = (unsigned char)(sr >> 4);
+    unsigned char rel = (unsigned char)(sr & 0x0F);
+    unsigned char bigger = (dec >= sus) ? dec : sus;
+    unsigned char weight = (unsigned char)(((unsigned char)(bigger * 2 + att + dec + sus) * 2) + rel);
+
+    weight = (unsigned char)(weight >> 1);
+    return (weight < 0x3F) ? weight : 0x3F;
+}
+
+// ---------------------------------------------------------------
+// hb_vis_sid_note — port of VisualizerSIDNote. Records note/sound/
+// channel into the CURRENT (not-yet-committed) event slot; the slot is
+// only advanced by hb_vis_sid_velocity()/hb_vis_sid_half_velocity().
+// Called unconditionally at the top of hb_play_sid_note(), before the
+// tied-note check (matches the original calling this before its own
+// tied-note branch).
+// ---------------------------------------------------------------
+static void hb_vis_sid_note(unsigned char note, unsigned char sid_idx, unsigned char ch_idx, unsigned char sound)
+{
+    unsigned char i = hb_vis_event_count;
+    if (i >= HB_VIS_MAX_EVENTS)
+        return;
+    hb_vis_events[i].note = note;
+    hb_vis_events[i].sound = sound;
+    hb_vis_events[i].channel = (unsigned char)(7 + sid_idx * 3 + ch_idx);
+}
+
+// Port of VisualizerSIDVelocity (full velocity, new note) and
+// VisualizerSIDHalfVelocity (half velocity, tied note) -- `half` selects
+// between them. Commits the current event slot and advances the write
+// index (wrapping at HB_VIS_MAX_EVENTS, matching the original).
+static void hb_vis_sid_commit(unsigned char sr, unsigned char ad, char half)
+{
+    unsigned char weight = hb_vis_adsr_weight(sr, ad);
+    unsigned char i = hb_vis_event_count;
+
+    if (half)
+        weight = (unsigned char)(weight >> 1);
+
+    if (i < HB_VIS_MAX_EVENTS)
+    {
+        hb_vis_events[i].velocity = weight;
+        i++;
+        if (i >= HB_VIS_MAX_EVENTS)
+            i = 0;
+        hb_vis_event_count = i;
+    }
+}
+
+// ---------------------------------------------------------------
+// hb_vis_sample_note — port of VisualizerSampleNote. Called
+// unconditionally at the top of hb_play_sample_note() (before the +9
+// note adjustment and before the tied-note check -- matches the
+// original), NOT from hb_trigger_sample()/hb_play_fx() (the original's
+// PlayFX jumps past this call site directly into ".editorentry").
+//
+// The "reverse UA sound numbers" step is ported as the original's exact
+// byte operations (sub 1 / xor $3F / add 1, each wrapping like the 6502
+// SBC/EOR/ADC), not simplified to "65 - sound" -- that simplification
+// only coincidentally matches for sound_in 1-64; it diverges for
+// sound_in==0 (the tied-note case), where the real 6502 sequence
+// produces $C1 via 8-bit wraparound, not a small "clean" number.
+// Unexplained in the source beyond its own comment -- likely just a
+// display/palette convention of the original author's own visualizer.
+// ---------------------------------------------------------------
+static void hb_vis_sample_note(unsigned char note, unsigned char ua_idx, unsigned char sound)
+{
+    unsigned char i = hb_vis_event_count;
+    unsigned char s;
+    if (i >= HB_VIS_MAX_EVENTS)
+        return;
+
+    s = (unsigned char)(sound - 1);
+    s = (unsigned char)(s ^ 0x3F);
+    s = (unsigned char)(s + 1);
+
+    hb_vis_events[i].note = note;
+    hb_vis_events[i].sound = s;
+    hb_vis_events[i].channel = ua_idx;
+}
+
+// Port of VisualizerSampleVelocity: commits the current event slot's
+// velocity and advances the write index (wrapping), same as
+// hb_vis_sid_commit()'s SID counterpart. Called from hb_play_sample_note()
+// (tied-note branch, half of last_volume) and hb_trigger_sample() (real
+// note, sample's own volume) -- both reachable from hb_play_fx() too,
+// since hb_trigger_sample() is PlayFX's shared continuation.
+static void hb_vis_sample_velocity(unsigned char volume)
+{
+    unsigned char i = hb_vis_event_count;
+    if (i < HB_VIS_MAX_EVENTS)
+    {
+        hb_vis_events[i].velocity = volume;
+        i++;
+        if (i >= HB_VIS_MAX_EVENTS)
+            i = 0;
+        hb_vis_event_count = i;
+    }
+}
+
 // ---------------------------------------------------------------
 // hb_load — scan SD/USB drives for `filename`, load it into REU at
 // `reu_addr`, then pull the song-data header blob into hb_songdata.
@@ -327,16 +463,24 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte);
 // again (Phase 10 adds PlayFX/StopFX, which are NOT called from hb_tick's
 // own call tree, so shouldn't affect this -- but re-check anyway).
 // ---------------------------------------------------------------
-// Phase-4-only: free-running, never-clamped fire counter for hardware
-// verification (hb_state.tick itself starts small and hits 0 within
-// milliseconds -- not usable to prove "still firing" over human-visible
-// time). Kept for now since it's still a cheap, useful liveness check.
-unsigned int hb_debug_tick_count;
-
 __interrupt void hb_tick(void)
 {
-    hb_debug_tick_count++;
-
+    // DELIBERATE DEVIATION from the original: player.s's VisualizerFrameInit
+    // resets the event queue's write index at the start of every TICK
+    // (~195 Hz), unconditionally. That's correct for the original's own
+    // visualizer, which is assumed to consume the queue synchronously
+    // within the same tick (or an equally tightly-coupled context). This
+    // port's visualizer (src/visualizer.c) instead consumes it once per
+    // VIC frame (~50 Hz, via vic_waitFrame()) from the main loop -- roughly
+    // once every 4 ticks. Resetting every tick as the original does would
+    // wipe out almost every note-on event before the main loop ever gets a
+    // chance to see it (notes only trigger roughly once per ROW, i.e. once
+    // every ~20-25 ticks, so the overwhelming majority of individual ticks
+    // have nothing to report -- exactly the tick a slow poll is likely to
+    // land on). So hb_tick does NOT reset the queue at all: events
+    // accumulate (up to HB_VIS_MAX_EVENTS, then wrap) until whoever is
+    // reading it resets hb_vis_event_count themselves once they're done
+    // with a batch -- see hb_vis_reset() / src/visualizer.c.
     if ((signed char)hb_state.play_mode < 0)
         return; // bit7 set: skip everything, including register update
 
@@ -409,21 +553,25 @@ __interrupt void hb_tick(void)
 // but never $02).
 //
 // RE-SWEPT after Phase 9 (Modulations + hb_early_gate_on roughly tripled
-// hb_tick's call tree -- hb_modulations/hb_modulate_sid_filter/
-// hb_modulate_channel/hb_modulate_portamento/hb_cutoff_bounce_step/
-// hb_early_gate_on are all new). Full JSR sweep of every function
-// transitively reachable from hb_tick found exactly two runtime helpers:
-// divmod (WORK+0..3/ACCU+0..1, already auto-saved) and mul16by8 ($02,
-// still NOT auto-saved -- same gap as Phase 6, no new one introduced). A
-// direct scan of the new Phase 9 functions' own disassembly for
-// unnamed/raw zero-page addressing (as opposed to the named ACCU/WORK/P/T
-// registers) found none -- they only ever touch zero page via those
-// already-covered registers.
+// hb_tick's call tree) and again after adding the visualizer hooks
+// (hb_vis_sid_note/hb_vis_sid_commit/hb_vis_sample_note/
+// hb_vis_sample_velocity, called from hb_play_sid_note/
+// hb_play_sample_note/hb_trigger_sample -- all in hb_tick's call tree).
+// Both sweeps found exactly the same two runtime helpers: divmod
+// (WORK+0..3/ACCU+0..1, already auto-saved) and mul16by8 ($02, still NOT
+// auto-saved -- same gap as Phase 6, no new one introduced). A direct
+// scan of every newly-added function's own disassembly for unnamed/raw
+// zero-page addressing (as opposed to the named ACCU/WORK/P/T registers)
+// found none each time -- they only ever touch zero page via those
+// already-covered registers. The auto-save prologue itself keeps
+// growing as the call tree grows (as of the visualizer-hooks sweep it
+// covers WORK+0..3, P0-P10, ACCU+0..3, and a contiguous $43-$52 T-register
+// range) -- Oscar64 finds more, never less, so this is expected.
 //
 // Manually saved/restored here around the hb_tick call, following the
 // same method as modplay_irq's documented gap analysis in
 // UltimateDemo2026/include/modplay.c. Re-run this same sweep whenever
-// hb_tick's call tree changes again (Phase 10).
+// hb_tick's call tree changes again.
 // ---------------------------------------------------------------
 __asm hb_irq
 {
@@ -491,13 +639,10 @@ void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 }
 
 // ---------------------------------------------------------------
-// hb_fetch_pattern_row — port of FetchPatternRow, through the REU row
-// fetch and pattern-pointer advance. Does NOT include SIDHardRestart
-// (that lands with Phase 6's SID note-trigger port) -- PHASE 5 scope is
-// just the row-fetch/sequencer-advance plumbing, verified by direct
-// repeated calls from main.c's debug block, not yet wired into hb_tick's
-// real per-tick dispatch (that needs PlayPatternRow/Modulations/
-// RegisterUpdate, which don't exist until Phases 6-9).
+// hb_fetch_pattern_row — port of FetchPatternRow: the REU row fetch and
+// pattern-pointer advance. Does NOT include SIDHardRestart (that's
+// hb_sid_hard_restart(), called separately by hb_tick's dispatch ahead of
+// a hard-restart, matching the original's own split).
 //
 // Pattern REU addressing: each pattern occupies an exact 4096-byte
 // (0x1000) REU slot, starting at slot (pattern_number + 15) -- i.e.
@@ -767,9 +912,13 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
     unsigned char sample_num = hb_row_buf[off + 1];
     unsigned linear = ((unsigned)note) << 6; // BaseFreq/H = note*64 (two lsr/ror pairs in the original)
 
+    hb_vis_sid_note(note, sid_idx, ch_idx, sample_num); // unconditional, before the tied-note check
+
     if (sample_num == 0)
     {
         // Tied note: only retarget portamento (or jump instantly if speed is 0).
+        hb_vis_sid_commit(c->sid_env_sr, c->sid_env_ad, 1); // half velocity (still-active envelope)
+
         c->target_freq_lo = (unsigned char)linear;
         c->target_freq_hi = (unsigned char)(linear >> 8);
         if (c->portamento == 0)
@@ -790,6 +939,8 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
 
         c->sid_env_ad = inst->env_ad;
         c->sid_env_sr = inst->env_sr;
+
+        hb_vis_sid_commit(c->sid_env_sr, c->sid_env_ad, 0); // full velocity (new envelope)
 
         c->finetune = inst->finetune;
         c->finetune_hi = (ft < 0) ? 0xFF : 0x00; // sign-extend
@@ -1053,9 +1204,18 @@ static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
     unsigned char sample_num = hb_row_buf[ua_idx * 2 + 1];
     unsigned char note = (unsigned char)(raw_note + 9); // "note value adjust" (matches PlayFX's own +9)
 
+    // Unconditional, before both the +9 adjustment's effects and the
+    // tied-note check -- matches the original calling VisualizerSampleNote
+    // with the raw (pre-adjustment) note at the very top of PlaySampleNote.
+    // NOT called from hb_trigger_sample()/hb_play_fx() -- PlayFX jumps past
+    // this call site directly into the shared continuation.
+    hb_vis_sample_note(raw_note, ua_idx, sample_num);
+
     if (sample_num == 0)
     {
         // Tied note: retarget portamento only (or jump instantly if speed is 0).
+        hb_vis_sample_velocity((unsigned char)(c->last_volume >> 1)); // half volume for tied notes
+
         unsigned char t = (unsigned char)(note + c->note_pitch);
         if (!(c->drum_flag & 0x80))
             t = (unsigned char)(t + (unsigned char)hb_state.transpose_now);
@@ -1115,6 +1275,7 @@ static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned
 
         base[AUDIO_OFF_VOL] = sp->volume;
         c->last_volume = sp->volume;
+        hb_vis_sample_velocity(sp->volume); // reachable from hb_play_fx() too (shared continuation)
         base[AUDIO_OFF_PAN] = sp->pan;
         c->last_pan = sp->pan;
 

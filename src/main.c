@@ -25,6 +25,7 @@
 #include "detect.h"
 #include "turbo.h"
 #include "hbplayer.h"
+#include "visualizer.h"
 
 #ifndef VERSION
 #define VERSION "v0.1.0-dev"
@@ -36,7 +37,7 @@
 // these path bytes to the wrong PETSCII case for UCI's raw-ASCII filesystem protocol.
 #pragma charmap(97, 97, 26)   // a-z -> a-z (identity, overrides petscii.h)
 #pragma charmap(65, 65, 26)   // A-Z -> A-Z (identity)
-static char hb_song_file[] = "Knight Rider Theme.reu";
+static char hb_song_file[] = "maniac.reu";
 #pragma charmap(97, 65, 26)   // restore petscii.h: a-z -> A-Z
 #pragma charmap(65, 97, 26)   // restore petscii.h: A-Z -> a-z
 #define HB_SONG_REU_BASE  0x000000UL
@@ -44,26 +45,6 @@ static char hb_song_file[] = "Knight Rider Theme.reu";
 // ---------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------
-
-// ---------------------------------------------------------------
-// hb_test_getin — raw KERNAL GETIN ($FFE4), non-blocking (returns 0 if the
-// keyboard buffer is empty). Bypasses conio.h's getchx() deliberately:
-// getchx() runs its result through convch()'s IOCharMap conversion, which
-// this file's petscii.h include would otherwise have to fight (as already
-// seen with the UCI path's #pragma charmap workarounds) -- comparing a raw
-// GETIN byte against explicit hex constants sidesteps that entirely.
-// Result stored to a file-scope static, not returned directly, per the
-// documented Oscar64 gotcha that an inline __asm block's store to a local
-// C variable is silently discarded (see oscar64manual.md).
-// ---------------------------------------------------------------
-static unsigned char hb_test_key;
-static void hb_test_getin(void)
-{
-    __asm {
-        jsr $ffe4
-        sta hb_test_key
-    }
-}
 
 static void fmt_dec(char *buf, unsigned char val)
 {
@@ -145,6 +126,7 @@ int main(void)
     cia1.cra = 0x01;       // start Timer A, continuous
 
     char detail[26];
+    char playback_started = 0; // set once visualizer_run() has taken over the screen
 
     // Subtitle: uppercase abbreviation + version via string concat.
     screen_init("Hardware Detection  " VERSION);
@@ -233,12 +215,7 @@ int main(void)
         screen_result("Audio", 1, detail);
     }
 
-    // ---- Heartbeat player: load test song -----------------------
-    // Struct-layout and #embed-table correctness (Phase 1) and the song
-    // loader (Phase 2) have both been hardware-verified already — see
-    // port plan / oscar64manual.md. Keep just a one-line confirmation here
-    // so the 40x25 screen doesn't overflow; playback itself lands in later
-    // phases.
+    // ---- Heartbeat player: load test song, then play it ----------
     if (detected_audio_version > 0)
     {
         char buf[40];
@@ -277,50 +254,41 @@ int main(void)
             if (detected_turbo_class != TURBO_NOT_PRESENT)
                 turbo_fast();
 
-            hb_detect_ntsc();
+            hb_detect_ntsc(); // must run before hb_init(), but doesn't itself start
+                              // playback -- fine to do while still on the detection screen
+
+            // ---- Detection complete, hand off to the visualiser --------
+            screen_blank_line();
+            screen_info("Detection complete.");
+            screen_blank_line();
+            screen_wait_key("Press any key to start playback.");
+
+            // hb_init(0,1) is what actually starts playback (installs the
+            // tick IRQ with play_mode=1) -- deliberately deferred until
+            // AFTER the keypress above, so music doesn't start while the
+            // user is still reading the detection screen.
             hb_init(0, 1);
 
-            // ---- Phase 10: test harness -- port of buttons.s ----------
-            // Space=restart, Stop=stop all sound, A-O=PlayFX sample 1-15
-            // at C-4 on UA channel 6, X=StopFX channel 6. RETURN exits the
-            // harness (buttons.s itself has no exit key -- the standalone
-            // player's main loop runs forever -- so this is this port's
-            // own addition to get back to BASIC cleanly).
-            screen_blank_line();
-            screen_info("Test harness (buttons.s):");
-            screen_hint("SPACE=restart  STOP=silence");
-            screen_hint("A-O=play FX 1-15   X=stop FX");
-            screen_hint("RETURN to exit");
-
-            for (;;)
-            {
-                hb_test_getin();
-
-                if (hb_test_key == 0x0D)       // RETURN: exit harness
-                    break;
-                else if (hb_test_key == 0x20)  // Space: restart music
-                    hb_init(0, 1);
-                else if (hb_test_key == 0x03)  // Run/Stop: stop all sound
-                    hb_stop_all();
-                else if ((hb_test_key & 0xF0) == 0x40) // A-O ($41-$4F)
-                {
-                    unsigned char n = (unsigned char)(hb_test_key & 0x0F);
-                    if (n != 0) // no sample $00 ('@')
-                        hb_play_fx(6, n, 0x26); // channel 6, note C-4
-                }
-                else if (hb_test_key == 0x58)  // 'X': stop FX channel 6
-                    hb_stop_fx(6);
-            }
+            // visualizer_run() owns the screen from here: note visualiser
+            // + the buttons.s-equivalent test harness (Space=restart,
+            // Stop=silence, A-O=PlayFX 1-15 on UA channel 6, X=StopFX
+            // channel 6), until RETURN is pressed.
+            visualizer_run();
 
             hb_stop_all();
+            playback_started = 1;
         }
     }
 
-    // ---- Detection complete ------------------------------------
-    screen_blank_line();
-    screen_info("Detection complete.");
-    screen_blank_line();
-    screen_wait_key(NULL);
+    // ---- Detection complete (only shown if playback never started --
+    // visualizer_run() already had its own exit prompt/keypress) --------
+    if (!playback_started)
+    {
+        screen_blank_line();
+        screen_info("Detection complete.");
+        screen_blank_line();
+        screen_wait_key(NULL);
+    }
 
     // Wait for exit key to be fully released before returning to BASIC.
     do {
