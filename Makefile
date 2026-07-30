@@ -23,8 +23,9 @@ else
   MKDIR   = mkdir -p
 endif
 
-# Toolchain
-CC = /home/xahmol/oscar64/bin/oscar64
+# Toolchain -- override if oscar64 isn't on PATH:
+#   make CC=/path/to/oscar64/bin/oscar64
+CC ?= oscar64
 
 # Application name
 MAIN = heartbeat-demo

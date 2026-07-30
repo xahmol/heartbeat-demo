@@ -10,8 +10,8 @@ Plays a Heartbeat Soundtracker song (.reu file, loaded into REU via UCI)
 using up to HB_MAX_SIDS SID chips (addresses read from the song data) and
 all 7 Ultimate Audio DMA channels.
 
-See /home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md for the
-full port plan and phasing.
+See ARCHITECTURE.md for internal design and HEARTBEATPLAYERMANUAL.md for
+the public API and song file format.
 ******************************************************************/
 
 #ifndef _HBPLAYER_H_
@@ -39,20 +39,11 @@ typedef struct {
     unsigned char flags;           // $1F — bit7 = drum flag; bits0-1 = loop mode (0=none,3=one-shot-cropped,else=loop)
 } hb_sample_params_t;              // 32 bytes
 
-// One 64-byte INSTPARAMS record (up to 64 of these, at SONGDATA+$1000)
-//
-// CORRECTED 2026-07-29 (hardware cross-check against the real test song):
-// the original Phase 1 layout put a "wave_arp_table" at $00-$0F. That was
-// wrong -- a live hardware read showed SID register writes reflecting the
-// ASCII bytes of an instrument name ("Reso Pluck") instead of a real
-// waveform value, which traced back to $00-$0F actually being the
-// instrument's NAME (editor-only text, never read by the player) and the
-// true wave/arpeggio tables sitting at $20-$2F/$30-$3F instead -- derived
-// from ModulateChannel's actual indexing (`and #$0f; ora #$30` -> arp
-// offset $30-$3F; `eor #$10` -> wave offset $20-$2F, confirmed via
-// `(step&0xF)|0x30` / `^0x10` in Python against the source). Also
-// independently confirmed the correct offset $20 holds $41 (a valid SID
-// pulse+gate control byte) in the real song data, not $52 ('R').
+// One 64-byte INSTPARAMS record (up to 64 of these, at SONGDATA+$1000).
+// $00-$0F is the instrument's NAME (editor-only text, never read by the
+// player) -- not step data. The real wave/arp tables are at $20-$2F/$30-$3F,
+// derived from ModulateChannel's actual indexing (`and #$0f; ora #$30` ->
+// arp offset $30-$3F; `eor #$10` -> wave offset $20-$2F).
 typedef struct {
     unsigned char _name[0x10];          // $00-$0F — instrument name (editor-only, never read by the player)
     unsigned char env_ad;               // $10
@@ -156,8 +147,8 @@ extern unsigned char hb_row_buf[64];
 
 // Per-SID-channel working state (x3 per chip). Kept byte-for-byte parallel
 // to the original's zero-page/parameter-page fields (not combined into
-// wider ints) so the Modulations port (Phase 9) can mirror the source's
-// 6502 carry propagation exactly instead of re-deriving it.
+// wider ints) so hb_modulations() can mirror the source's 6502 carry
+// propagation exactly instead of re-deriving it.
 typedef struct {
     unsigned char base_freq_lo, base_freq_hi;      // BaseFreq/H
     unsigned char vib_delay, vib_phase, vib_width; // vibrato
@@ -176,8 +167,8 @@ typedef struct {
     // Active register image (SIDImage in the original) -- what
     // WriteOneSID actually flushes to hardware each tick. Distinct from
     // the working-parameter fields above: those feed into these via
-    // Modulations (Phase 9); Phase 6 sets these directly/statically at
-    // note-trigger time as a simplification (see hb_play_sid_note()).
+    // hb_modulations(); hb_play_sid_note() sets these directly/statically
+    // at note-trigger time as a simplification.
     unsigned char sid_freq_lo, sid_freq_hi;         // SIDFreq/H
     unsigned char sid_pw_lo, sid_pw_hi;              // SIDPW/H
     unsigned char sid_wave;                          // SIDWave (waveform | gate)
@@ -233,8 +224,8 @@ char hb_detect_ntsc(void);
 
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode);
 // PlayerInit port: reset player state, init SID images/volumes and UA
-// channels, set starting tempo. Does NOT yet install the tick IRQ (added
-// in the port's Phase 4) -- call hb_detect_ntsc() before this.
+// channels, set starting tempo, and install the tick IRQ at $0314/$0315.
+// Call hb_detect_ntsc() before this.
 
 void hb_stop_all(void);
 // StopAllSound port: stop playback, silence all SIDs/UA channels.

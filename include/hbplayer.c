@@ -2,16 +2,15 @@
 Heartbeat Soundtracker player — C/Oscar64 port, implementation
 See hbplayer.h for API documentation and NOTICE.md for attribution.
 
-Phases 1-9 done: data structures, song loader, NTSC detection, init/tempo/
+Full player: data structures, song loader, NTSC detection, init/tempo/
 stop-all, tick IRQ, pattern-row fetch, SID + UA note trigger with register
-flush, Cmd8x_* track-command dispatch, and full per-tick modulation
-(vibrato/PWM/filter-sweep/wave-arp-table-stepping/portamento -- see
-hb_modulations()). hb_play_sid_note() still sets the note's INITIAL pitch/
-waveform directly at trigger time (matching PlaySIDNote); everything it
-sets is now continuously modulated every tick afterwards by
-hb_modulate_channel(), same as the original. PlayFX/StopFX + test harness
-(Phase 10) still outstanding -- see
-/home/xahmol/.claude/plans/ok-now-plan-for-rosy-lighthouse.md for phasing.
+flush, Cmd8x_* track-command dispatch, full per-tick modulation (vibrato/
+PWM/filter-sweep/wave-arp-table-stepping/portamento -- see
+hb_modulations()), and PlayFX/StopFX for one-off sample triggering.
+hb_play_sid_note() sets a note's INITIAL pitch/waveform directly at trigger
+time (matching PlaySIDNote); everything it sets is then continuously
+modulated every tick afterwards by hb_modulate_channel(), same as the
+original. See ARCHITECTURE.md for the full tick/IRQ architecture.
 ******************************************************************/
 
 #include <c64/cia.h>
@@ -39,8 +38,9 @@ static const unsigned char hb_bpmtable[768] = {
 #define HB_BPM_TIMER_LO(bpm)     (hb_bpmtable[256 + (unsigned char)(bpm)])
 #define HB_BPM_TIMER_HI(bpm)     (hb_bpmtable[512 + (unsigned char)(bpm)])
 
-// NTSC BPM timer-lo delta (additive, applied at hb_set_tempo() time — see
-// hbplayer.h / the port plan for why this isn't pre-baked into a second table)
+// NTSC BPM timer-lo delta, applied additively at hb_set_tempo() time instead
+// of pre-baking a second full BPM table (this table is 256 bytes; a whole
+// second BPM table would be 768).
 static const unsigned char hb_bpm_ntsc_add[256] = {
     #embed "../reference/heartbeat-player-src/bin/bpmtable-ntsc.bin"
 };
@@ -58,7 +58,7 @@ static const unsigned char hb_palfreq[1536] = {
 
 // SID frequency table, NTSC variant — selected instead of hb_palfreq when
 // hb_state.ntsc_detected (runtime pointer choice, no in-place mutation of
-// the PAL table as the original assembly does — see port plan §4).
+// the PAL table as the original assembly does).
 static const unsigned char hb_ntscfreq[1536] = {
     #embed "../reference/heartbeat-player-src/bin/ntsc-freq.bin"
 };
@@ -293,9 +293,9 @@ char hb_load(char *filename, unsigned long reu_addr)
 // Only the detection test itself is ported. The original also patches its
 // BPM/frequency tables in place once NTSC is detected (converting them
 // permanently) — this port deliberately avoids that: hb_set_tempo() and
-// the (Phase 9) frequency lookup select between the PAL/NTSC embedded
-// tables via this flag at each use instead, so no runtime mutation of
-// #embed-sourced data is needed (see port plan §4).
+// the frequency lookup (hb_get_sid_freq()) select between the PAL/NTSC
+// embedded tables via this flag at each use instead, so no runtime
+// mutation of #embed-sourced data is needed.
 //
 // Written as an inline __asm block (not re-derived in C) because the
 // timing-sensitive raster-line poll is easy to subtly break via re-
@@ -349,8 +349,8 @@ char hb_detect_ntsc(void)
 // Init helpers — split to match the original's fall-through structure:
 // InitUltimateAudioAndSIDs (UA channels + falls through into SID reset)
 // vs. InitSIDImageAndVolumes alone (what StopAllSound jumps directly to,
-// deliberately skipping the UA reset -- see port plan discussion; this is
-// the reference player's actual behavior, ported as-is for exactness).
+// deliberately skipping the UA reset -- this is the reference player's
+// actual behavior, ported as-is for exactness).
 // ---------------------------------------------------------------
 static void hb_init_sid_image_and_volumes(void)
 {
@@ -386,11 +386,11 @@ static void hb_init_ua_and_sids(void)
 // embedded BPM table (not a formula -- the reference deliberately uses a
 // precomputed PAL table); applies the NTSC delta additively when
 // hb_state.ntsc_detected, instead of the original's one-time in-place
-// table mutation (see port plan §4).
+// table mutation.
 //
 // php/plp (not sei/cli) to match the original exactly: this may be called
-// from within the (Phase 4) tick IRQ via a Bt track command, where
-// unconditionally re-enabling interrupts at the end (cli) would be wrong.
+// from within the tick IRQ via a Bt track command, where unconditionally
+// re-enabling interrupts at the end (cli) would be wrong.
 // ---------------------------------------------------------------
 void hb_set_tempo(unsigned char bpm_minus_64)
 {
@@ -457,11 +457,11 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte);
 //                          register flush
 //
 // __interrupt: Oscar64 auto-saves whatever ZP it statically determines
-// this function's call tree touches. Re-verified via -g build + .asm after
-// Phase 9's additions (see hb_irq's comment for the full gap-analysis
-// history) -- do NOT assume past results still hold if this body grows
-// again (Phase 10 adds PlayFX/StopFX, which are NOT called from hb_tick's
-// own call tree, so shouldn't affect this -- but re-check anyway).
+// this function's call tree touches (see hb_irq's comment for the full
+// gap-analysis method) -- do NOT assume past results still hold if this
+// body grows: re-verify via -g build + .asm whenever a change adds a new
+// call into this function's tree (PlayFX/StopFX are NOT called from it,
+// so shouldn't affect this -- but re-check anyway).
 // ---------------------------------------------------------------
 __interrupt void hb_tick(void)
 {
@@ -542,36 +542,27 @@ __interrupt void hb_tick(void)
 // oscar64manual.md), this is installed via `*((void**)0x0314) = hb_irq;`,
 // never called with hb_irq().
 //
-// ZERO-PAGE GAP (found 2026-07-29, Phase 6; re-verified after Phase 9):
-// hb_tick's call tree grew to include hb_play_sid_note(), whose `note << 6`
-// frequency-scaling compiles to a call to Oscar64's mul16by8 runtime
-// routine (rather than unrolled shifts). Verified via -g build + .asm
-// inspection that mul16by8 uses zero-page $02 as scratch, in addition to
-// ACCU+0/1 ($1B/$1C) -- and that $02 is NOT among the ZP locations
-// Oscar64's __interrupt prologue for hb_tick auto-saves (as of Phase 9,
-// this prologue saves WORK+0..3, P0-P10, ACCU+0..3, T0-T3, and $4D-$51 --
-// but never $02).
+// ZERO-PAGE GAP: hb_tick's call tree includes hb_play_sid_note(), whose
+// `note << 6` frequency-scaling compiles to a call to Oscar64's mul16by8
+// runtime routine (rather than unrolled shifts). Verified via -g build +
+// .asm inspection that mul16by8 uses zero-page $02 as scratch, in addition
+// to ACCU+0/1 ($1B/$1C) -- and that $02 is NOT among the ZP locations
+// Oscar64's __interrupt prologue for hb_tick auto-saves (currently saves
+// WORK+0..3, P0-P10, ACCU+0..3, T0-T3, and $4D-$51 -- but never $02).
 //
-// RE-SWEPT after Phase 9 (Modulations + hb_early_gate_on roughly tripled
-// hb_tick's call tree) and again after adding the visualizer hooks
-// (hb_vis_sid_note/hb_vis_sid_commit/hb_vis_sample_note/
-// hb_vis_sample_velocity, called from hb_play_sid_note/
-// hb_play_sample_note/hb_trigger_sample -- all in hb_tick's call tree).
-// Both sweeps found exactly the same two runtime helpers: divmod
-// (WORK+0..3/ACCU+0..1, already auto-saved) and mul16by8 ($02, still NOT
-// auto-saved -- same gap as Phase 6, no new one introduced). A direct
-// scan of every newly-added function's own disassembly for unnamed/raw
-// zero-page addressing (as opposed to the named ACCU/WORK/P/T registers)
-// found none each time -- they only ever touch zero page via those
-// already-covered registers. The auto-save prologue itself keeps
-// growing as the call tree grows (as of the visualizer-hooks sweep it
-// covers WORK+0..3, P0-P10, ACCU+0..3, and a contiguous $43-$52 T-register
-// range) -- Oscar64 finds more, never less, so this is expected.
+// The only other runtime helper reachable from hb_tick's call tree is
+// divmod (WORK+0..3/ACCU+0..1, already auto-saved) -- a direct scan of
+// every reachable function's own disassembly for unnamed/raw zero-page
+// addressing (as opposed to the named ACCU/WORK/P/T registers) finds
+// nothing else; they only ever touch zero page via those already-covered
+// registers. The auto-save prologue itself grows as the call tree grows
+// -- Oscar64 finds more, never less -- so this needs re-verifying (see
+// ARCHITECTURE.md's zero-page gap analysis methodology) whenever
+// hb_tick's call tree changes, not just once.
 //
 // Manually saved/restored here around the hb_tick call, following the
 // same method as modplay_irq's documented gap analysis in
-// UltimateDemo2026/include/modplay.c. Re-run this same sweep whenever
-// hb_tick's call tree changes again.
+// UltimateDemo2026/include/modplay.c.
 // ---------------------------------------------------------------
 __asm hb_irq
 {
@@ -593,8 +584,8 @@ hb_irq_raster:
 }
 
 // ---------------------------------------------------------------
-// hb_init — port of PlayerInit. Installs the tick IRQ (Phase 4) and
-// resets player state. Call hb_detect_ntsc() before this.
+// hb_init — port of PlayerInit. Installs the tick IRQ and resets player
+// state. Call hb_detect_ntsc() before this.
 // ---------------------------------------------------------------
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 {
@@ -653,10 +644,10 @@ void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 // so the bank only ever changes when switching patterns, never mid-
 // pattern (64 rows x 64 bytes = 4096 bytes = exactly one slot).
 //
-// MusicPlayMode==2 (pattern-loop/editor "PatternBuffer" mode) is an
-// explicit MVP non-goal (see port plan) -- the fallback below just loops
-// the current pattern from row 0 instead of reading the (unimplemented)
-// PatternBuffer at $C000.
+// MusicPlayMode==2 (pattern-loop/editor "PatternBuffer" mode) is not
+// implemented -- the standalone player itself never uses it either. The
+// fallback below just loops the current pattern from row 0 instead of
+// reading the (unimplemented) PatternBuffer at $C000.
 // ---------------------------------------------------------------
 void hb_fetch_pattern_row(void)
 {
@@ -724,7 +715,7 @@ void hb_fetch_pattern_row(void)
 }
 
 // =================================================================
-// Phase 6: SID note trigger + shadow flush
+// SID note trigger + shadow flush
 // =================================================================
 
 // ---------------------------------------------------------------
@@ -789,8 +780,8 @@ static char hb_check_sid_mute(unsigned char sid_idx)
 }
 
 // ---------------------------------------------------------------
-// hb_sid_hard_restart — port of SIDHardRestart (deferred from Phase 5's
-// FetchPatternRow, which this project splits out since it's SID-specific
+// hb_sid_hard_restart — port of SIDHardRestart (split out from
+// hb_fetch_pattern_row()'s port of FetchPatternRow, since it's SID-specific
 // register-image work, not row-fetch/sequencer work). For each unmuted
 // SID channel with a genuine new note incoming this row (not empty, not
 // an effect/command byte, not a stop, not a tied note), forces the
@@ -839,12 +830,6 @@ static void hb_sid_hard_restart(void)
 // but reads the CURRENT row's about-to-play instrument's ADSR directly
 // (not a fixed silence template) and sets a fixed waveform byte from the
 // song data (hardrestart_gateon_wave) rather than clearing it.
-//
-// NOTE: this function existed as a source-level requirement since Phase 5
-// (hb_songdata already has hardrestart_gateon_time/hardrestart_gateon_wave)
-// but was never wired up until Phase 9 -- a real gap in earlier phases,
-// closed here alongside Modulations since both affect per-tick SID
-// register state.
 // ---------------------------------------------------------------
 static void hb_early_gate_on(void)
 {
@@ -1048,7 +1033,8 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
 // ---------------------------------------------------------------
 // hb_play_pattern_row_sid — SID portion of PlayPatternRow. The Cmd-channel
 // command check (checked first in the original) and per-channel command
-// bytes (bit7 set) are Phase 8 scope -- skipped here.
+// bytes (bit7 set) are handled by hb_cmd_channel_cmd()/hb_sid_track_cmd()
+// (see the Cmd8x_* track-command dispatch section below) -- skipped here.
 //
 // Does NOT update last_ua_mutes/last_sid_mutes or reset hb_state.tick --
 // those happen once, in hb_play_pattern_row() below, AFTER both this and
@@ -1143,7 +1129,7 @@ static void hb_register_update_sid(void)
 }
 
 // =================================================================
-// Phase 7: Ultimate Audio sample trigger + shadow flush
+// Ultimate Audio sample trigger + shadow flush
 // =================================================================
 
 // ---------------------------------------------------------------
@@ -1383,7 +1369,8 @@ static void hb_stop_sample_note(unsigned char ua_idx)
 
 // ---------------------------------------------------------------
 // hb_play_pattern_row_ua — UA portion of PlayPatternRow. Per-channel
-// command bytes (bit7 set, UATrackCMD) are Phase 8 scope -- skipped here.
+// command bytes (bit7 set, UATrackCMD) are handled by hb_ua_track_cmd()
+// (see the Cmd8x_* track-command dispatch section below) -- skipped here.
 // See hb_play_pattern_row_sid()'s comment for why last_ua_mutes isn't
 // updated here either.
 // ---------------------------------------------------------------
@@ -1465,7 +1452,7 @@ static void hb_register_update(void)
 }
 
 // =================================================================
-// Phase 8: Cmd8x_* track-command dispatch
+// Cmd8x_* track-command dispatch
 // =================================================================
 //
 // Command byte $80-$8A (11 commands): Pa(pan)/Bt(tempo)/Dn(slide down)/
@@ -1732,9 +1719,9 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte)
 }
 
 // =================================================================
-// Phase 9: Modulations (vibrato/PWM/filter-sweep/wave-arp stepping,
-// portamento) -- port of Modulations/ModulateSIDandUA/ModulateChannel
-// (player.s lines 1547-2013).
+// Modulations (vibrato/PWM/filter-sweep/wave-arp stepping, portamento) --
+// port of Modulations/ModulateSIDandUA/ModulateChannel (player.s lines
+// 1547-2013).
 //
 // Structural deviation from the source (verified behaviorally identical):
 // the original interleaves SID-filter-modulation and UA-channel-portamento
@@ -1870,7 +1857,7 @@ static void hb_modulate_sid_filter(hb_sid_chip_t *chip)
 // rewritten to hardware every tick, unconditionally (matches the source --
 // .portadone is the fallthrough for every path, not just the active-slide
 // ones), reusing audio_channel_set_rate for the actual hardware write
-// (same register-order convention already proven in Phase 7).
+// (same register-order convention as hb_trigger_sample()'s own UA writes).
 // ---------------------------------------------------------------
 static void hb_modulate_ua_channel(unsigned char ua_idx)
 {
@@ -2042,8 +2029,8 @@ static void hb_modulate_channel(unsigned char sid_idx, unsigned char ch_idx)
 
 // ---------------------------------------------------------------
 // hb_modulations — port of Modulations's top-level dispatch loop. See the
-// Phase 9 header comment above for why this is two plain loops instead of
-// the source's one shared-index loop.
+// "Modulations" section comment above for why this is two plain loops
+// instead of the source's one shared-index loop.
 // ---------------------------------------------------------------
 static void hb_modulations(void)
 {
@@ -2061,7 +2048,7 @@ static void hb_modulations(void)
 }
 
 // =================================================================
-// Phase 10: PlayFX / StopFX (manual sample trigger, outside song playback)
+// PlayFX / StopFX (manual sample trigger, outside song playback)
 // =================================================================
 
 // ---------------------------------------------------------------

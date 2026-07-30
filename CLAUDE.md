@@ -71,10 +71,8 @@ no genuinely free space for the visualiser to use).
 
 ## Toolchain: Oscar64
 
-See `oscar64manual.md` (canonical copy, kept in sync with
-`/home/xahmol/git/UltimateDemo2026/oscar64manual.md` per global `~/.claude/CLAUDE.md`
-instructions) for the full compiler reference: flags, pragmas, language extensions,
-library APIs, gotchas.
+See `oscar64manual.md` for the full compiler reference: flags, pragmas, language
+extensions, library APIs, gotchas.
 
 All project headers use `#pragma compile("filename.c")` so only the `.h` needs to be
 `#include`d; Oscar64 automatically compiles the `.c`.

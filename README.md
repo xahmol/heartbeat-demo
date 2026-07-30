@@ -217,7 +217,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md#2-memory-layout) for the full breakdown 
 
 | Tool | Purpose | Install |
 |---|---|---|
-| [Oscar64](https://github.com/drmortalwombat/oscar64) | C compiler | see project README |
+| [Oscar64](https://github.com/drmortalwombat/oscar64) | C compiler | see project README; if `oscar64` isn't on your `PATH`, build with `make CC=/path/to/oscar64/bin/oscar64` |
 | `zip` | Release archive | `sudo apt install zip` |
 | `wput` | FTP deploy | `sudo apt install wput` |
 | `curl` | Deploy connectivity check | `sudo apt install curl` |

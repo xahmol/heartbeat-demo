@@ -300,7 +300,7 @@ int main(void)
             // hb_tick would run at 1 MHz regardless of firmware settings.
             // hb_tick's per-tick budget is fixed in REAL time by the CIA1
             // Timer A period (~5.08 ms @ PAL, independent of CPU speed);
-            // Phase 9's full Modulations pass (24 SID channels + 7 UA
+            // The full Modulations pass (24 SID channels + 7 UA
             // channels, every tick) does not reliably fit in the ~5000 CPU
             // cycles that period gives at 1 MHz, causing dropped/coalesced
             // ticks -- audible as playback running far slower than the

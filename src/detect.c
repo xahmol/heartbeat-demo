@@ -43,8 +43,8 @@ char detect_uci(void) {
 // -O2, so it always returns 0 even when a REU is present. Passing the probe
 // byte through this __noinline barrier forces the compiler to materialize
 // the value at a real call boundary instead of assuming it away. Same fix
-// already applied in UBoot64-v2 (src/main.c). See oscar64manual.md /
-// ~/.claude/oscar64.md for the full diagnosis.
+// already applied in UBoot64-v2 (src/main.c). See oscar64manual.md for the
+// full diagnosis.
 // ---------------------------------------------------------------
 __noinline char reu_probe_barrier(char v) {
     return v;
