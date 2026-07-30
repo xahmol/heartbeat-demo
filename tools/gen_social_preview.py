@@ -105,7 +105,7 @@ canvas.paste(logo_scaled, (logo_x, logo_y))
 
 # --- Text ---
 draw.text((TEXT_X, TITLE_Y),  "heartbeat-demo",       font=font_title, fill=C_CYAN)
-draw.text((TEXT_X, VERS_Y),   "v1.0.0",                font=font_vers,  fill=C_YELLOW)
+draw.text((TEXT_X, VERS_Y),   "v1.0.1",                font=font_vers,  fill=C_YELLOW)
 draw.text((TEXT_X, DESC_Y),        "Heartbeat Soundtracker",  font=font_desc, fill=C_WHITE)
 draw.text((TEXT_X, DESC_Y + 34),   "player port + visualiser", font=font_desc, fill=C_WHITE)
 draw.text((TEXT_X, DESC_Y + 68),   "for the Ultimate 64",      font=font_desc, fill=C_WHITE)
