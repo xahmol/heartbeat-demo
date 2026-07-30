@@ -7,7 +7,7 @@ standalone player, for the Ultimate 64 — plus a hardware-verified demo that pl
 real Heartbeat song end-to-end: turbo mode, the 16 MB REU, and all 8 SID chips +
 7 Ultimate Audio DMA channels driven from a single tick IRQ.
 
-**Status: v1.0.0, feature-complete and hardware-verified** — full song playback
+**Status: v1.0.1, feature-complete and hardware-verified** — full song playback
 (tempo, all SID + Ultimate Audio channels, vibrato/PWM/filter sweep/portamento
 modulation, in-pattern track commands), a `buttons.s`-equivalent interactive test
 harness, and a "wow factor" note visualiser (two-column VU meters, plasma
@@ -26,6 +26,7 @@ bundled songs.
 6. [Credits](#credits)
 7. [Building from Source](#building-from-source)
 8. [Reusing the Player Library in Your Own Project](#reusing-the-player-library-in-your-own-project)
+9. [Changelog](#changelog)
 
 ---
 
@@ -335,3 +336,28 @@ if (hb_load("My Song.reu", 0x000000UL)) {
     }
 }
 ```
+
+---
+
+## Changelog
+
+### v1.0.1
+
+- Fixed `hb_irq`'s CIA1 (tick) branch running the full KERNAL keyboard-scan/
+  jiffy-clock sequence at the ~195 Hz tick rate instead of never — caught in
+  code review by Aleksi Eeben, Heartbeat Soundtracker's own author. Key
+  repeat now feels normal instead of roughly 4x too fast; see
+  [`ARCHITECTURE.md`](ARCHITECTURE.md#3-irq--tick-architecture) for the
+  corrected dual-branch design.
+- Corrected a mislabeled firmware config preset: `config/Heartbeat-C64U.cfg`
+  is Heartbeat Soundtracker's own unmodified preset for hardware/firmware
+  that accepts the `C64U Turbo Registers` setting, not "the original
+  Ultimate 64" as previously (incorrectly) stated.
+
+### v1.0.0
+
+Initial public release: full Heartbeat Soundtracker player port (all SID +
+Ultimate Audio channels, modulation, in-pattern track commands), the "wow
+factor" note visualiser (two-column VU meters, plasma background,
+spectroscope, sprite scrolltext, in-demo song switching), firmware config
+presets for the U64/U64E2, and complete documentation.
