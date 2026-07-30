@@ -62,7 +62,7 @@ void screen_init(const char *subtitle) {
     cwin_clear(&cw);
 
     // With petscii.h: source mixed-case → correct mixed-case display
-    screen_header_line(0, "heartbeat-demo", COL_HEADER1);
+    screen_header_line(0, "Heartbeat Tracker Player Demo", COL_HEADER1);
     screen_header_line(1, subtitle,         COL_HEADER2);
 
     cwin_cursor_move(&cw, 0, 3);

@@ -1,9 +1,57 @@
 // heartbeat-demo
 // Hardware detection and startup for the Ultimate 64
 // Use MMAP_NO_BASIC ($36) throughout: KERNAL+I/O visible, $A000-$BFFF always RAM.
-// Region extends to $C000 so code+data+bss+stack fit safely below the MC screen at $C000.
-#pragma region(main, 0x0A00, 0xC000, , , {code, data, bss, heap, stack})
+//
+// Four separate regions instead of one $0A00-$C000 blob, so the visualiser's
+// manually-placed VIC bank 2 screen/charset/sprite data (src/visualizer.c,
+// $A000-$BFFF) can never collide with ordinary code/data/bss/heap/stack:
+//
+//   - $0A00-$9400: normal code+data+bss (measured usage ~34.5KB with the
+//     full visualiser -- fill/plasma/spectroscope/scroller -- built in;
+//     this leaves a few hundred bytes of headroom, verify against
+//     build/*.map's BSSEnd after any change that adds meaningfully-sized
+//     new statics).
+//   - $9400-$9500: heap (heapsize(256) below).
+//   - $9500-$9900: stack (stacksize(0x400) below).
+//   - $9900-$A000: unused gap (kept clear of the $9000-$9FFF hardware
+//     character-ROM-shadow range on principle, even though CPU-side
+//     code/data placement there is actually safe -- only VIC char/bitmap
+//     FETCHES are shadowed, not general RAM access).
+//   - $A000-$BFFF: reserved here, used directly by visualizer.c.
+//
+// This fixes a real, confirmed bug: with a single undivided region, Oscar64
+// happily placed ordinary BSS globals (hb_sids -- live SID channel state,
+// written every tick -- landed at $8A6A) inside what visualizer.c assumed
+// was "free" VIC bank 2 scratch space, based on nothing but a BSSEnd
+// snapshot. The visualiser's charset copy then clobbered hb_sids the
+// instant it ran, killing SID playback outright. It went unnoticed through
+// several milestones only because until then something inert happened to
+// land there instead -- sheer luck, not a property of the design. Region
+// pragmas are the only way to make the linker itself enforce the split;
+// never trust an address range is free just because nothing currently
+// visible in the map claims it.
+//
+// Note this also debunks the ORIGINAL assumption behind $8000-$8FFF/
+// $A000-$AFFF specifically: heap/stack apparently claim the entire
+// remaining region tail regardless of heapsize()/stacksize() values,
+// exactly like stack alone used to before -- so with a single region there
+// was in fact no genuinely free window anywhere in $8000-$BFFF at all, only
+// the small explicit heap/stack regions below plus $A000-$BFFF freed up by
+// excluding it from `main` altogether.
+#pragma region(main,  0x0A00, 0x9400, , , {code, data, bss})
+#pragma region(rheap, 0x9400, 0x9500, , , {heap})
+#pragma region(rstack, 0x9500, 0x9900, , , {stack})
 #pragma heapsize(256)
+// Explicit stack size: without this, Oscar64 defaults to filling ALL
+// remaining region space with the stack (observed: stack reserved from
+// ~$7CD0 to ~$BF26, ~17KB), leaving no free space in VIC banks 1/2 for the
+// visualiser's custom charset/sprite assets (see ARCHITECTURE.md's memory
+// layout notes). This program has no deep/recursive call chains -- 1KB is
+// a generous margin over anything actually observed, freeing the rest for
+// explicit reuse. Verify against build/*.map's StackEnd/HeapEnd after any
+// change here, and re-run the zero-page + stack-safety check described in
+// ARCHITECTURE.md before trusting a build that changes this.
+#pragma stacksize(0x400)
 // Written in 2026 by Xander Mol
 //
 // petscii.h is required: with the lowercase+uppercase charset and
