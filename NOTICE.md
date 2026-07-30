@@ -38,8 +38,8 @@ original or GPL-3-licensed works.
   already publicly distributed by the tracker's author — included here on
   that same basis, as demo material for this player, not as an original
   composition of this project.
-- **`maniac.reu`** — Xander Mol's own Heartbeat Soundtracker arrangement,
-  itself an adaptation of a pre-existing commercial song. Also demo content,
+- **`maniac.reu`** — Xander Mol's own Heartbeat Soundtracker arrangement of
+  "Maniac" (Michael Sembello, from *Flashdance*, 1983). Also demo content,
   not an original composition, and not GPL-3-licensed.
 
 If you fork or reuse this repository's own code (the C player port, the demo
