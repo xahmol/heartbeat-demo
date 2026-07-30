@@ -5,8 +5,12 @@
 # reference only, not published. Only our C conversion (include/hbplayer.*) is public.
 reference/
 
-# Test song files (large binary assets, deployed to U64 SD/USB, not committed)
+# Test song files (large binary assets, deployed to U64 SD/USB, not committed
+# by default). The two songs actually shipped with this demo ARE committed --
+# see NOTICE.md for why they're excluded from the project's own GPL-3 grant.
 *.reu
+!/assets/maniac.reu
+!/assets/Knight Rider Theme.reu
 
 # Build output
 build/*.prg
