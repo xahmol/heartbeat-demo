@@ -44,6 +44,38 @@ bundled songs.
 - An SD card or USB drive for the Ultimate 64 — both bundled songs ship in the
   release ZIP, no separate song file needed (see [Installation](#installation))
 
+### Firmware configuration presets
+
+Getting every setting above right by hand (SID addressing, filter curves, mixer
+levels, turbo) is easy to get subtly wrong. `config/` (also included in the
+release ZIP) has two ready-made `.cfg` presets — one **Load Settings from File**
+away from a correctly configured device:
+
+| File | For |
+|---|---|
+| `config/Heartbeat-C64U.cfg` | Original Ultimate 64 |
+| `config/Heartbeat-U64E2.cfg` | Ultimate 64 Elite II |
+
+These come from Heartbeat Soundtracker's own bundled `Heartbeat.cfg` (ships
+with the tracker itself, written for the original C64U). On a U64 Elite II,
+that file's `Turbo Control=C64U Turbo Registers` line is not a valid setting —
+confirmed directly against a live U64E2's own reported config choices (`Off`,
+`Manual`, `U64 Turbo Registers`, `TurboEnable Bit` — no `C64U Turbo Registers`
+at all) — and fails to load with an error. `Heartbeat-U64E2.cfg` is the same
+file with that one line changed to `Turbo Control=U64 Turbo Registers`;
+everything else is identical.
+
+**Back up your current settings first** — loading either file overwrites your
+Audio Mixer, Speaker Mixer, UltiSID, SID Addressing, and U64/Cartridge settings
+with the values above. In the Configuration screen (`F2`), save your current
+setup to a file (e.g. `mysettings.cfg`) before loading one of these presets, so
+you can restore it afterwards the same way.
+
+To apply: `F2` to open the Configuration screen, use its **Load Settings from
+File** option (key hints for Load/Save are shown at the bottom of the screen —
+exact key varies by firmware version) and select the `.cfg` matching your
+hardware, then **Save Settings** so it persists across reboots.
+
 ---
 
 ## Installation

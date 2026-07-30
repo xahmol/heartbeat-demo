@@ -82,6 +82,15 @@ TARGET = build/$(MAIN).prg
 # this is a plain string, not a Make list, precisely so that quoting works.
 SONGFILES = "assets/maniac.reu" "assets/Knight Rider Theme.reu"
 
+# Ultimate 64 firmware config presets for this demo's required settings
+# (SID addressing, filter curves, mixer levels, turbo) -- see README's
+# Requirements section. Two variants because "Turbo Control"'s valid value
+# differs by hardware/firmware: original C64U uses "C64U Turbo Registers",
+# Elite II (and any other firmware reporting that string as invalid) uses
+# "U64 Turbo Registers" instead -- confirmed against a live U64E2's own
+# reported config choices, not just documentation.
+CONFIGFILES = "config/Heartbeat-C64U.cfg" "config/Heartbeat-U64E2.cfg"
+
 # Demo install path on SD/USB (must match demo_path[] in src/main.c once used)
 INSTALL_PATH = idi8b/heartbeat-demo
 # NOTE: The zip target hardcodes the first path component "idi8b" in the cleanup
@@ -117,12 +126,16 @@ clean:
 	$(DEL) build/*.zip 2>$(NULLDEV) ; true
 
 zip: $(TARGET) README.pdf
-	$(MKDIR) build/$(INSTALL_PATH) 2>$(NULLDEV) ; true
+	$(MKDIR) build/$(INSTALL_PATH)/config 2>$(NULLDEV) ; true
 	cp $(TARGET)   build/$(INSTALL_PATH)/$(MAIN).prg
 	cp README.md   build/$(INSTALL_PATH)/README.md
 	@if [ -f README.pdf ]; then cp README.pdf build/$(INSTALL_PATH)/README.pdf; fi
 	@for f in $(SONGFILES); do \
 		if [ -f "$$f" ]; then cp "$$f" build/$(INSTALL_PATH)/; else \
+			echo "WARNING: $$f not found -- zip built without it"; fi; \
+	done
+	@for f in $(CONFIGFILES); do \
+		if [ -f "$$f" ]; then cp "$$f" build/$(INSTALL_PATH)/config/; else \
 			echo "WARNING: $$f not found -- zip built without it"; fi; \
 	done
 	cd build && zip -r $(MAIN)-$(VERSION).zip idi8b/
@@ -149,4 +162,7 @@ deploy: check-deploy $(TARGET)
 	wput -u $(TARGET) $(ULTFTP)$(ULTPATH)$(MAIN).prg
 	@for f in $(SONGFILES); do \
 		if [ -f "$$f" ]; then wput -u "$$f" $(ULTFTP)$(ULTPATH)"$$(basename "$$f")"; fi; \
+	done
+	@for f in $(CONFIGFILES); do \
+		if [ -f "$$f" ]; then wput -u "$$f" $(ULTFTP)$(ULTPATH)"config/$$(basename "$$f")"; fi; \
 	done
