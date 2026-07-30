@@ -86,12 +86,18 @@ hardware, then **Save Settings** so it persists across reboots.
 
 ![Hardware detection screenshot](screenshots/detection.png)
 
+> **⚠ Prefer the internal microSD slot over a USB drive.** A C64U firmware bug
+> causes many USB drives to randomly disconnect when Ultimate Audio channels
+> are in use, requiring you to unplug and reinsert the drive. This may be
+> fixed in a future C64U firmware update — until then, the internal microSD
+> slot is extremely reliable and strongly recommended for this demo.
+
 1. Build (see [Building from Source](#building-from-source)) or download the
    [latest release ZIP](https://github.com/xahmol/heartbeat-demo/releases/latest).
-2. Extract to the **root** of an SD card or USB drive — the ZIP contains the
-   `idi8b/heartbeat-demo/` folder already, so extracting at the drive root creates
-   the correct layout, including both bundled song files (see
-   [Credits](#credits)) — no manual song placement needed.
+2. Extract to the **root** of an SD card (recommended) or USB drive — the ZIP
+   contains the `idi8b/heartbeat-demo/` folder already, so extracting at the
+   drive root creates the correct layout, including both bundled song files
+   (see [Credits](#credits)) — no manual song placement needed.
 3. Insert the SD card / connect the USB drive to your Ultimate 64.
 4. In the Ultimate menu, navigate to `idi8b/heartbeat-demo/` and load
    `heartbeat-demo.prg`.
