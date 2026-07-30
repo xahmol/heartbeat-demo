@@ -112,7 +112,7 @@ REU `(pattern_number + 15) << 12`; sample data at
 
 `hb_irq` (a raw, prologue-free `__asm` block — not a C function; installed via
 `*((void**)0x0314) = hb_irq`, never called with `hb_irq()`) checks `$D019` bit 0
-first to tell the two apart:
+first to tell the two apart, and the two branches deliberately end differently:
 
 ```
 hb_irq:
@@ -126,20 +126,24 @@ hb_irq:
     pla
     sta $02
     lda $dc0d                ; ack CIA1 Timer A IRQ (clear-on-read)
-    jmp $ea31
+    pla                      ; restore A/X/Y in the order the KERNAL's own
+    tay                      ; hardware IRQ entry ($FF48) pushed them, and
+    pla                      ; RTI directly -- bypasses the KERNAL IRQ tail
+    tax                      ; entirely, so this branch never touches
+    pla                      ; SCNKEY or the jiffy-clock/STOP-key logic
+    rti
 
 hb_irq_raster:
     sta $d019                ; ack raster IRQ
     jmp $ea31                ; $EA31's own sequence includes SCNKEY
 ```
 
-Both branches chain to KERNAL `$EA31` (not `$EA81`, despite the reference using
-`$EA81` — see the "PORT DEVIATION" comment on `hb_irq` in `hbplayer.c`: chaining to
-`$EA81` under `MMAP_NO_BASIC` was hardware-confirmed to stop `hb_tick` firing after
-~2 invocations, likely hitting an unprotected KERNAL/BASIC-ROM path that this
-project's `$0310`/`$A002` startup patches don't cover for that entry point).
-`$EA31`'s own sequence already includes `SCNKEY`, so the raster branch needs no
-separate manual keyboard-scan call.
+Only the raster branch chains to KERNAL `$EA31`, whose own sequence includes
+`SCNKEY` — this is the only place keyboard scanning happens, at the raster
+IRQ's fixed ~50/60 Hz rate, independent of however slow the current BPM's
+tick rate is. The CIA1 (tick) branch fires far too often (~195 Hz) for
+keyboard scanning or KERNAL's jiffy-clock/STOP-key logic to run there, so it
+bypasses the KERNAL tail entirely with its own register-restore-and-`rti`.
 
 ### The `__interrupt` auto-save gap
 
