@@ -25,7 +25,9 @@ endif
 
 # Toolchain -- override if oscar64 isn't on PATH:
 #   make CC=/path/to/oscar64/bin/oscar64
-CC ?= oscar64
+# (plain '=', not '?=' -- CC is a Make built-in with a default of 'cc',
+# which is never "unset", so '?=' would silently never take effect)
+CC = oscar64
 
 # Application name
 MAIN = heartbeat-demo
