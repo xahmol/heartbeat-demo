@@ -271,14 +271,14 @@ by the player — editor-only metadata.
 | `$00`-`$0F` | (unused by the player — editor metadata) |
 | `$10` | `volume` |
 | `$11` | `pan` |
-| `$12` | `note_pitch` — semitones; transpose applies unless the drum flag is set |
+| `$12` | `note_pitch` — semitones; always applied. `transpose_now` (from `sequencer_transpose[256]`, see the top-level song data table above) is added on top of it unless the drum flag is set |
 | `$13` | `finetune` (signed) |
 | `$14` | `portamento` speed (`$00` = instant) |
 | `$15` | `reu_bank` — sample REU address = `0x01000000 \| (reu_bank << 16)`; every sample begins at a 64 KB-aligned REU offset |
 | `$16`-`$18` | `length[3]` — 24-bit, LSB-first |
 | `$19`-`$1B` | `loop_a[3]` — 24-bit, LSB-first |
 | `$1C`-`$1E` | `loop_b[3]` — 24-bit, LSB-first |
-| `$1F` | `flags` — bit 7 = drum flag (no transpose); bits 0-1 = loop mode (`0`=none, `3`=one-shot cropped to the loop A/B region, else = loop) |
+| `$1F` | `flags` — bit 7 = drum flag (suppresses transpose); bits 0-1 = loop mode: `0` = none, `1` = infinite loop (a key-up event stops the note immediately), `2` = loop with release (the first key-up event releases the loop and plays past the loop-B point to the end of the sample; a second key-up then stops the note immediately, as in mode 1), `3` = one-shot cropped to the loop A/B region (no actual looping) |
 
 ### `hb_inst_params_t` — one SID instrument record (64 bytes)
 

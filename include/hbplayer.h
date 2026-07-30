@@ -29,14 +29,19 @@ typedef struct {
     unsigned char _unused[0x10];   // $00-$0F — never read by the player
     unsigned char volume;          // $10
     unsigned char pan;             // $11
-    unsigned char note_pitch;      // $12 — semitones; transpose skipped if drum flag set
+    unsigned char note_pitch;      // $12 — semitones; always applied. Sequencer transpose
+                                    // is added on top of it unless the drum flag is set
     unsigned char finetune;        // $13 — signed
     unsigned char portamento;      // $14 — $00 = instant
     unsigned char reu_bank;        // $15 — REU sample address = 0x01000000 | (reu_bank << 16)
     unsigned char length[3];       // $16-$18 — 24-bit, LSB-first
     unsigned char loop_a[3];       // $19-$1B — 24-bit, LSB-first
     unsigned char loop_b[3];       // $1C-$1E — 24-bit, LSB-first
-    unsigned char flags;           // $1F — bit7 = drum flag; bits0-1 = loop mode (0=none,3=one-shot-cropped,else=loop)
+    unsigned char flags;           // $1F — bit7 = drum flag (suppresses transpose); bits0-1 =
+                                    // loop mode: 0=none, 1=infinite (key-up stops immediately),
+                                    // 2=loop-with-release (first key-up releases, plays to end
+                                    // of sample; second key-up then stops immediately),
+                                    // 3=one-shot cropped to loop A/B region
 } hb_sample_params_t;              // 32 bytes
 
 // One 64-byte INSTPARAMS record (up to 64 of these, at SONGDATA+$1000).
