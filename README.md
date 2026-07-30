@@ -1,5 +1,7 @@
 # heartbeat-demo
 
+![Note visualiser screenshot](screenshots/visualizer.png)
+
 A C/Oscar64 port of the [Heartbeat Soundtracker](https://sites.google.com/view/heartbeatsoundtracker)
 standalone player, for the Ultimate 64 — plus a hardware-verified demo that plays a
 real Heartbeat song end-to-end: turbo mode, the 16 MB REU, and all 8 SID chips +
@@ -45,6 +47,8 @@ bundled songs.
 ---
 
 ## Installation
+
+![Hardware detection screenshot](screenshots/detection.png)
 
 1. Build (see [Building from Source](#building-from-source)) or download a release
    ZIP.
