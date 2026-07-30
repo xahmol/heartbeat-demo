@@ -27,9 +27,10 @@ assembly reference source is kept **local-only** at `reference/heartbeat-player-
 ## Build
 
 ```
-make          # compile → build/heartbeat-demo.prg
+make          # compile + regenerate README.pdf + versioned release ZIP (default target)
 make clean    # remove build artefacts
-make deploy   # wput to ULTHOST (set in .env, copy from .env.example)
+make docs     # regenerate README.pdf alone (requires pandoc)
+make deploy   # wput PRG + both bundled songs to ULTHOST (set in .env, copy from .env.example)
 ```
 
 The Makefile sets `-i=include -tm=c64 -tf=prg -O2 -dNOFLOAT`. Oscar64 follows
@@ -39,27 +40,34 @@ The Makefile sets `-i=include -tm=c64 -tf=prg -O2 -dNOFLOAT`. Oscar64 follows
 
 | Path | Role |
 |------|------|
-| `src/main.c` | Entry point; currently runs hardware detection sequence only |
-| `src/screen.h/.c` | CharWin screen helpers (header, result lines, error exit) |
+| `src/main.c` | Entry point: hardware detection, song load, then hands off to the visualiser |
+| `src/screen.h/.c` | CharWin screen helpers for the detection screen (header, result lines, error exit) |
 | `src/detect.h/.c` | Hardware detection: UCI, REU size, turbo, Ultimate Audio |
+| `src/visualizer.h/.c` | Note visualiser + test harness screen (VIC bank 2): two-column VU meters, plasma, spectroscope, sprite scrolltext, song switching |
 | `include/defines.h` | Project-wide constants: PETSCII codes, screen codes, colour palette (`COL_*`), string limits, `CharWin cw` extern, `APP_NAME` |
-| `include/` | Reusable library headers/sources (turbo, audio, UCI) |
+| `include/` | Reusable library headers/sources (turbo, audio, UCI, the Heartbeat player itself) |
 | `build/` | Compiler output (`.prg`, `.map`, `.asm`, `.lbl`) |
 | `reference/heartbeat-player-src/` | **Gitignored, local-only.** Heartbeat Soundtracker standalone player 6502 source (from the gold license; redistribution permitted per `NOTICE.md`, but kept unpublished by choice — only the C conversion is public) — see below |
 
-**Status: the Heartbeat player port is feature-complete** (all 10 phases of the
-porting plan done and hardware-verified — full song playback, all SID + Ultimate
-Audio channels, modulation, in-pattern track commands, and a `buttons.s`-equivalent
-test harness). Hardware detection (`src/detect.c`) confirms UCI, 16 MB REU, turbo,
-and Ultimate Audio are present and working before playback starts.
+**Status: v1.0.0, feature-complete and hardware-verified** — full song playback
+(all SID + Ultimate Audio channels, modulation, in-pattern track commands), a
+`buttons.s`-equivalent test harness, and a "wow factor" note visualiser (two-column
+VU meters, plasma, spectroscope, sprite scrolltext, in-demo song switching).
+Hardware detection (`src/detect.c`) confirms UCI, 16 MB REU, turbo, and Ultimate
+Audio are present and working before playback starts.
 
 For the player library's public API and the song file format, see
 [`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md). For internal design (tick/
 IRQ architecture, data flow, zero-page verification methodology), see
 [`ARCHITECTURE.md`](ARCHITECTURE.md) — read that before making any change to
 `hbplayer.c`'s tick-reachable call tree, since it documents a real, recurring
-zero-page hazard (`$02`/`mul16by8`) and the exact method used to re-verify it after
-every phase.
+zero-page hazard (`$02`/`mul16by8`) and the exact method used to re-verify it
+whenever that call tree changes. Before making any change to the memory layout
+(new large globals, moving the visualiser's screen/charset/sprite addresses),
+see the region pragmas' own extensive comment in `src/main.c` — a real bug was
+found and fixed there (Oscar64's heap/stack silently claim the entire remaining
+region tail regardless of declared size, so a naive single-region layout leaves
+no genuinely free space for the visualiser to use).
 
 ## Toolchain: Oscar64
 

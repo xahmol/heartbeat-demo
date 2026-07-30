@@ -171,15 +171,13 @@ useful to call directly for diagnostics (e.g. printing raw row bytes).
 
 Clears the visualizer event queue (`hb_vis_events[]`) and resets
 `hb_vis_event_count` to 0. Not called internally by the player — call it from your
-own code when switching visualizer modes or restarting the song, if you want a
-clean slate rather than waiting for the next tick's natural reset.
+own code when switching visualizer modes or restarting the song, if you want an
+explicit clean slate.
 
 ### Visualizer hooks
 
 Port of the original's `visualizerout` block — every SID and Ultimate Audio note
-trigger populates a rolling queue of `(note, sound, channel, velocity)` events,
-reset at the start of every tick (`hb_state.play_mode` doesn't matter — the queue
-resets even when playback is fully off).
+trigger appends a `(note, sound, channel, velocity)` event to a queue.
 
 ```c
 #define HB_VIS_MAX_EVENTS 32
@@ -192,14 +190,21 @@ typedef struct {
 } hb_vis_event_t;
 
 extern hb_vis_event_t hb_vis_events[HB_VIS_MAX_EVENTS];
-extern unsigned char  hb_vis_event_count; // valid entries this tick
+extern unsigned char  hb_vis_event_count; // valid entries since the last time YOUR code reset it
 ```
 
-**Read this once per your own update cycle** (e.g. once per VIC frame), not once
-per tick — ticks fire far faster (~195 Hz) than any practical redraw rate, so
-`hb_vis_events[0 .. hb_vis_event_count-1]` is a **per-tick snapshot that gets
-overwritten on the next tick**, not a history buffer. A visualizer wanting smooth
-VU-meter-style decay needs to accumulate/decay values itself across reads.
+**`hb_tick()` deliberately never resets this queue itself.** Ticks fire far
+faster (~195 Hz) than any practical redraw rate (e.g. ~50 Hz for a once-per-VIC-
+frame consumer), and notes only trigger a few times per pattern row — a per-tick
+reset would wipe events before a slower consumer ever saw them. Instead, **your
+own update cycle owns the reset**: each time you poll, take a snapshot of
+`hb_vis_event_count` first, process `hb_vis_events[0 .. count-1]`, then set
+`hb_vis_event_count = 0` yourself (new events from ticks in between start
+appending from index 0 again). See `src/visualizer.c`'s `vis_decay_and_draw()`
+in this project for a complete, working reference implementation — it also
+shows one way to build smooth VU-meter-style decay: keep a per-channel level
+array, decay it a little every poll, and set it from whatever event(s) arrived
+since the last poll.
 
 SID channel numbers: `7 + sid_idx*3 + ch_idx` (so chip 0's 3 channels are 7, 8, 9;
 chip 1's are 10, 11, 12; and so on). UA channels use their own index (0-6)
@@ -299,10 +304,6 @@ by the player — editor-only metadata.
 | `$20`-`$2F` | `wave_table[16]` — waveform step table |
 | `$30`-`$3F` | `arp_table[16]` — arpeggio step table (shares step indices with `wave_table`; `$FC`/`$FD`/`$FE` in the wave table are envelope-AD/envelope-SR/speed commands whose parameter comes from the matching arp-table slot; `$FF` is a loop-to-step command) |
 
-**Note:** an earlier revision of this port had `wave_table`/`arp_table` at
-`$00`-`$0F` — that was wrong (confirmed via hardware cross-check against real
-song data) and has been corrected to the offsets above.
-
 ---
 
 ## 5. Player-Internal State
@@ -395,8 +396,14 @@ writes may route there instead of the internal UltiSID emulation (see
   own `StopAllSound`, which only re-runs the SID-side init.
 - **`MusicPlayMode == 2`** (pattern-loop/editor live-preview mode) is not
   implemented — the standalone player itself never uses it either.
-- **Visualizer output hooks** from the original (conditional `visualizerout`
-  blocks) are not ported — this library has no visualizer.
+- **Visualizer output hooks** are ported (see [§3](#visualizer-hooks) above) with
+  one deliberate deviation from the original: the event queue accumulates across
+  ticks instead of resetting every tick, since a real consumer polls far slower
+  than the tick rate. This library itself (`hbplayer.h`/`.c`) only exposes the
+  raw hooks — the actual rendering (VU bars, plasma, spectroscope, sprite
+  scroller) lives in this project's `src/visualizer.c`, a separate consumer
+  built entirely on the public hooks above, usable as a reference for building
+  your own.
 - PWM/filter/cutoff internal representations use the same "$8000 marker bit,
   hardware ignores the unused high bits" trick as the original — see
   [`ARCHITECTURE.md`](ARCHITECTURE.md) if you need to read/modify these fields

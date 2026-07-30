@@ -5,12 +5,12 @@ standalone player, for the Ultimate 64 — plus a hardware-verified demo that pl
 real Heartbeat song end-to-end: turbo mode, the 16 MB REU, and all 8 SID chips +
 7 Ultimate Audio DMA channels driven from a single tick IRQ.
 
-**Status: v1.0.0, feature-complete.** All 10 phases of the port are done and
-hardware-verified — full song playback (tempo, all SID + Ultimate Audio channels,
-vibrato/PWM/filter sweep/portamento modulation, in-pattern track commands), a
-`buttons.s`-equivalent interactive test harness, and a "wow factor" note visualiser
-(two-column VU meters, plasma background, spectroscope, sprite scrolltext) with
-in-demo switching between two bundled songs.
+**Status: v1.0.0, feature-complete and hardware-verified** — full song playback
+(tempo, all SID + Ultimate Audio channels, vibrato/PWM/filter sweep/portamento
+modulation, in-pattern track commands), a `buttons.s`-equivalent interactive test
+harness, and a "wow factor" note visualiser (two-column VU meters, plasma
+background, spectroscope, sprite scrolltext) with in-demo switching between two
+bundled songs.
 
 ---
 
@@ -39,8 +39,8 @@ in-demo switching between two bundled songs.
   - If some SID channels are silent, check `F2` → Audio Mixer → `Vol UltiSid 1`/
     `Vol UltiSid 2` are not `OFF` — see
     [`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md#7-firmware-prerequisites)
-- A Heartbeat Soundtracker `.reu` song file on an SD card or USB drive (see
-  Installation)
+- An SD card or USB drive for the Ultimate 64 — both bundled songs ship in the
+  release ZIP, no separate song file needed (see [Installation](#installation))
 
 ---
 
@@ -50,17 +50,20 @@ in-demo switching between two bundled songs.
    ZIP.
 2. Extract to the **root** of an SD card or USB drive — the ZIP contains the
    `idi8b/heartbeat-demo/` folder already, so extracting at the drive root creates
-   the correct layout.
-3. Place your Heartbeat Soundtracker `.reu` song file in that same folder,
-   named to match `hb_song_file[]` in `src/main.c` (ships set to
-   `"Knight Rider Theme.reu"`, the reference test song).
-4. Insert the SD card / connect the USB drive to your Ultimate 64.
-5. In the Ultimate menu, navigate to `idi8b/heartbeat-demo/` and load
+   the correct layout, including both bundled song files (see
+   [Credits](#credits)) — no manual song placement needed.
+3. Insert the SD card / connect the USB drive to your Ultimate 64.
+4. In the Ultimate menu, navigate to `idi8b/heartbeat-demo/` and load
    `heartbeat-demo.prg`.
 
-The demo auto-detects hardware, loads the song (auto-scanning all connected SD/USB
-drives if it isn't found at the U64's configured home directory first), and starts
-playback automatically.
+The demo auto-detects hardware, loads the first song (auto-scanning all connected
+SD/USB drives if it isn't found at the U64's configured home directory first), and
+starts playback automatically. Press `S` on the visualiser screen to switch to the
+other song at any time (see
+[Note Visualiser and Test Harness Controls](#note-visualiser-and-test-harness-controls)).
+
+To use your own song instead, add its `.reu` file to `idi8b/heartbeat-demo/` and
+edit `vis_song_files[]`/`vis_song_names[]` in `src/visualizer.c` to reference it.
 
 ---
 
@@ -226,7 +229,7 @@ See [`ARCHITECTURE.md`](ARCHITECTURE.md#2-memory-layout) for the full breakdown 
 make          # compile → build/heartbeat-demo.prg + versioned ZIP in build/
 make clean    # remove build artefacts
 make docs     # regenerate README.pdf (requires pandoc)
-make deploy   # upload PRG + test song to your Ultimate 64 via FTP
+make deploy   # upload PRG + both bundled songs to your Ultimate 64 via FTP
 ```
 
 `make all` (the default target) also regenerates `README.pdf` if `pandoc` is
@@ -256,7 +259,7 @@ unreachable, instead of failing deep inside `wput`.
 | `zip` | Build the release ZIP alone |
 | `docs` | Regenerate `README.pdf` alone |
 | `check-deploy` | Verify the U64 in `.env` is reachable (used internally by `deploy`) |
-| `deploy` | Upload the `.prg` and test song to the U64 via FTP |
+| `deploy` | Upload the `.prg` and both bundled songs to the U64 via FTP |
 
 ---
 

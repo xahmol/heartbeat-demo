@@ -50,10 +50,18 @@ eye.
 
 ## 2. Memory Layout
 
-Build region: `#pragma region(main, 0x0A00, 0xC000, ...)` — `$0A00`–`$BFFF`, with
-`$01=$36` (`MMAP_NO_BASIC`: KERNAL + I/O visible, `$A000`–`$BFFF` always CPU RAM,
-no BASIC ROM shadow). Code, data, BSS, heap, and stack all live in this one region;
-exact sizes shift per build (check `build/*.map` for the current binary).
+`$01=$36` (`MMAP_NO_BASIC`: KERNAL + I/O visible, `$A000`–`$BFFF` always CPU RAM, no
+BASIC ROM shadow). Code, data, BSS, heap, and stack each live in their own
+`#pragma region` in `src/main.c`, sized to leave `$A000`–`$BFFF` free for the note
+visualiser's own VIC bank 2 screen/charset/sprite data (`src/visualizer.c`) — see
+[`README.md`](README.md#memory-map) for the full address table and the region
+pragmas' own extensive comment for why the split exists (giving heap/stack their
+own small dedicated regions, rather than one big region covering everything, is
+required — Oscar64's linker otherwise lets them silently claim the entire
+remaining region tail regardless of declared `heapsize()`/`stacksize()`, leaving
+no genuinely free space for the visualiser to use). Exact sizes shift per build;
+check `build/*.map`'s `BSSEnd` against `main`'s own declared end whenever a change
+adds a meaningfully-sized new global.
 
 Key runtime data structures (all BSS, sized as documented in
 [`HEARTBEATPLAYERMANUAL.md`](HEARTBEATPLAYERMANUAL.md#4-song-data-structures)):
@@ -137,8 +145,8 @@ separate manual keyboard-scan call.
 
 `hb_tick` is declared `__interrupt`, so Oscar64 auto-generates a save/restore
 prologue for whatever zero-page locations it can **statically** determine the
-function's call tree touches (as of the full Phase 9 call tree: `WORK+0..3`,
-`P0`-`P10`, `ACCU+0..3`, `T0`-`T3`, and `$4D`-`$51`).
+function's call tree touches (currently: `WORK+0..3`, `P0`-`P10`, `ACCU+0..3`,
+`T0`-`T3`, and `$4D`-`$51`).
 
 This analysis has a real, confirmed gap: **`mul16by8`** (Oscar64's runtime
 multiply helper, pulled in by several `note << 6`-style computations across the
@@ -150,9 +158,9 @@ specifically because it's what the sweep in the next section found.
 
 ### Zero-page gap analysis methodology
 
-This isn't a one-time fix — the call tree changed with every phase, and a new
-runtime-helper dependency could introduce a new gap at any point. The method,
-reapplied after every phase that touched `hb_tick`'s call tree:
+This isn't a one-time fix — any change to `hb_tick`'s call tree (a new runtime-
+helper dependency, a new function it calls into) can introduce a new gap. Re-run
+this method whenever that call tree changes:
 
 1. Build with `-g` (`oscar64 ... -g -o=build/hbdemo-dbg.prg src/main.c`), producing
    `build/hbdemo-dbg.asm` with full source-line-annotated disassembly.
@@ -167,8 +175,8 @@ reapplied after every phase that touched `hb_tick`'s call tree:
    included). Watch for wrong range boundaries: picking the *next* label instead of
    the function's *actual* end pulls in unrelated code that happens to be laid out
    next in the binary and produces false-positive "JSR"s that don't belong to the
-   call tree at all (this happened once in this project's own history — see the
-   commit history around the Phase 9 re-verification).
+   call tree at all — this has happened in practice, so double-check range
+   boundaries against the disassembly rather than assuming the next label is right.
 5. For each function in the resulting reachable set, grep its disassembly for raw
    zero-page addressing (`LDA $XX` / `STA $XX` with a **bare 2-hex-digit operand,
    no `WORK`/`ACCU`/`P`/`T`-prefixed symbol name and no `#` immediate marker**) —
@@ -177,9 +185,8 @@ reapplied after every phase that touched `hb_tick`'s call tree:
 6. Cross-reference every such location against the current auto-save set. Anything
    not covered needs manual protection in `hb_irq`, the same way `$02` is.
 
-This sweep has been re-run after every phase that grew `hb_tick`'s call tree
-(Phases 6 through 9) and found exactly one gap throughout the whole port ($02,
-`mul16by8`) — `divmod`/`divmod32` (used by the octave-fold frequency lookups, see
+This sweep has found exactly one gap throughout the whole port ($02, `mul16by8`)
+— `divmod`/`divmod32` (used by the octave-fold frequency lookups, see
 [§6](#6-frequency-conversion)) only ever touch `WORK`/`ACCU`, which are already
 covered.
 
@@ -235,13 +242,11 @@ happens in `hb_modulate_channel()`, which runs **every tick**, including the sam
 tick as the trigger (since `hb_modulations()` runs after `hb_play_pattern_row()`
 within one `hb_tick()` call).
 
-This split exists in the original too, and porting it required going back and
-adding note-trigger init that had been deliberately deferred to "the modulation
-phase" in an earlier pass of this port. The lesson generalizes: **when adding a
-modulation-sweep routine, always check whether the corresponding note-trigger init
-was actually written**, because "the sweep looks right" and "the note plays" are
-different claims, and a stuck-at-zero PWM register (0% duty cycle = silence) looks
-identical to an idle channel in a raw memory dump.
+This split exists in the original too. **Any change to a modulation-sweep
+routine should be checked against the corresponding note-trigger init**, because
+"the sweep looks right" and "the note plays" are different claims, and a
+stuck-at-zero PWM register (0% duty cycle = silence) looks identical to an idle
+channel in a raw memory dump.
 
 ---
 
@@ -341,22 +346,23 @@ increasing order of confidence:
    (`hb_sids[]`, `hb_ua[]`, `hb_state`) via live memory reads on real hardware,
    cross-checked against independently-recomputed expected values (e.g. from a
    `dd`/`od` + Python dump of the actual `.reu` file's bytes). This catches real
-   logic bugs — it's how a Phase 1 `INSTPARAMS` struct-layout bug (wave/arp table
-   at the wrong offset) was found, since the "wrong" bytes decoded to a
-   recognizable ASCII instrument name instead of a real waveform value. **Does
-   not catch threshold-effect bugs** — a register that's silently stuck at 0 looks
+   logic bugs — it's how an `INSTPARAMS` struct-layout bug (wave/arp table at the
+   wrong offset) was found, since the "wrong" bytes decoded to a recognizable
+   ASCII instrument name instead of a real waveform value. **Does not catch
+   threshold-effect bugs** — a register that's silently stuck at 0 looks
    identical to a channel that's legitimately idle at that row in a raw memory
-   dump; only a real listening test caught the missing-PWM-init bug in Phase 9.
-   When re-reading memory across multiple deploy/run cycles, always confirm the
-   `.prg` currently running on the device is the one just built (rebuild a matching
-   `-g` binary with the same version string and `cmp` it byte-for-byte against
-   what was deployed) — reading a stale or different program's memory at the
-   "right" address looks like plausible-but-wrong data, not an obvious error.
+   dump; only a real listening test caught a missing PWM-init bug of exactly that
+   shape. When re-reading memory across multiple deploy/run cycles, always
+   confirm the `.prg` currently running on the device is the one just built
+   (rebuild a matching `-g` binary with the same version string and `cmp` it
+   byte-for-byte against what was deployed) — reading a stale or different
+   program's memory at the "right" address looks like plausible-but-wrong data,
+   not an obvious error.
 3. **Real listening tests** — the only check that catches threshold effects
    (silence from a 0%-duty-cycle PWM register), tempo/timing feel, and anything
-   else that "looks correct in a memory dump" can hide. Several real bugs in this
-   port (missing PWM/filter/vibrato init, the turbo-not-engaged tempo bug) were
-   only found this way, after passing both of the above checks cleanly.
+   else that "looks correct in a memory dump" can hide. Real bugs in this port
+   (missing PWM/filter/vibrato init, a turbo-not-engaged tempo bug) were only
+   found this way, after passing both of the above checks cleanly.
 
 ---
 

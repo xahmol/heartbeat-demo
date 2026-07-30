@@ -72,12 +72,12 @@ TARGET = build/$(MAIN).prg
 
 ########################################
 
-# Heartbeat test song, deployed alongside the .prg (not committed to git —
-# large binary test asset, see .gitignore). Must match hb_song_file[] in
-# src/main.c. Currently the project owner's own work-in-progress song
-# (assets/Knight Rider Theme.reu is kept as the original reference test
-# song used throughout the player port's development/verification).
-SONGFILE = assets/maniac.reu
+# The two songs the demo can switch between at runtime (visualizer.c's 'S' key)
+# -- both deployed alongside the .prg. Must match vis_song_files[] in
+# src/visualizer.c. Quoted as one shell word each so the embedded space in
+# "Knight Rider Theme.reu" survives the for-loops in zip/deploy below --
+# this is a plain string, not a Make list, precisely so that quoting works.
+SONGFILES = "assets/maniac.reu" "assets/Knight Rider Theme.reu"
 
 # Demo install path on SD/USB (must match demo_path[] in src/main.c once used)
 INSTALL_PATH = idi8b/heartbeat-demo
@@ -118,8 +118,10 @@ zip: $(TARGET) README.pdf
 	cp $(TARGET)   build/$(INSTALL_PATH)/$(MAIN).prg
 	cp README.md   build/$(INSTALL_PATH)/README.md
 	@if [ -f README.pdf ]; then cp README.pdf build/$(INSTALL_PATH)/README.pdf; fi
-	@if [ -f "$(SONGFILE)" ]; then cp "$(SONGFILE)" build/$(INSTALL_PATH)/; else \
-		echo "WARNING: $(SONGFILE) not found -- zip built without test song"; fi
+	@for f in $(SONGFILES); do \
+		if [ -f "$$f" ]; then cp "$$f" build/$(INSTALL_PATH)/; else \
+			echo "WARNING: $$f not found -- zip built without it"; fi; \
+	done
 	cd build && zip -r $(MAIN)-$(VERSION).zip idi8b/
 	$(RMDIR) build/idi8b 2>$(NULLDEV) ; true
 
@@ -142,4 +144,6 @@ check-deploy:
 
 deploy: check-deploy $(TARGET)
 	wput -u $(TARGET) $(ULTFTP)$(ULTPATH)$(MAIN).prg
-	@if [ -f "$(SONGFILE)" ]; then wput -u "$(SONGFILE)" $(ULTFTP)$(ULTPATH)"$(notdir $(SONGFILE))"; fi
+	@for f in $(SONGFILES); do \
+		if [ -f "$$f" ]; then wput -u "$$f" $(ULTFTP)$(ULTPATH)"$$(basename "$$f")"; fi; \
+	done
