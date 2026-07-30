@@ -85,10 +85,11 @@ SONGFILES = "assets/maniac.reu" "assets/Knight Rider Theme.reu"
 # Ultimate 64 firmware config presets for this demo's required settings
 # (SID addressing, filter curves, mixer levels, turbo) -- see README's
 # Requirements section. Two variants because "Turbo Control"'s valid value
-# differs by hardware/firmware: original C64U uses "C64U Turbo Registers",
-# Elite II (and any other firmware reporting that string as invalid) uses
-# "U64 Turbo Registers" instead -- confirmed against a live U64E2's own
-# reported config choices, not just documentation.
+# differs by hardware/firmware: Heartbeat Soundtracker's own unmodified
+# Heartbeat.cfg uses "C64U Turbo Registers", which a U64 Elite II (and any
+# other firmware reporting that string as invalid) rejects -- confirmed
+# against a live U64E2's own reported config choices, not just
+# documentation. Heartbeat-U64E2.cfg uses "U64 Turbo Registers" instead.
 CONFIGFILES = "config/Heartbeat-C64U.cfg" "config/Heartbeat-U64E2.cfg"
 
 # Demo install path on SD/USB (must match demo_path[] in src/main.c once used)

@@ -50,10 +50,10 @@ own composition or a song you have the rights to distribute.
 ## Firmware Config Presets (`config/*.cfg`)
 
 `config/Heartbeat-C64U.cfg` is Heartbeat Soundtracker's own bundled
-`Heartbeat.cfg` (ships with the tracker itself, for the original Ultimate 64),
-included here as a convenience preset for this demo's own required firmware
-settings. `config/Heartbeat-U64E2.cfg` is a one-line derivative of it (only
-`Turbo Control`'s value changed, for Ultimate 64 Elite II compatibility —
+`Heartbeat.cfg`, unmodified (ships with the tracker itself), included here as
+a convenience preset for this demo's own required firmware settings.
+`config/Heartbeat-U64E2.cfg` is a one-line derivative of it (only `Turbo
+Control`'s value changed, for Ultimate 64 Elite II compatibility —
 hardware-confirmed, see the Requirements section of README.md) — not an
 original work, just a settings file, and not GPL-3-licensed any more than the
 original.

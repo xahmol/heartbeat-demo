@@ -53,17 +53,20 @@ away from a correctly configured device:
 
 | File | For |
 |---|---|
-| `config/Heartbeat-C64U.cfg` | Original Ultimate 64 |
-| `config/Heartbeat-U64E2.cfg` | Ultimate 64 Elite II |
+| `config/Heartbeat-C64U.cfg` | Heartbeat Soundtracker's own unmodified preset — targets hardware/firmware that accepts the `C64U Turbo Registers` setting |
+| `config/Heartbeat-U64E2.cfg` | Ultimate 64 Elite II (hardware-confirmed) — likely also correct for the original (non-Elite) Ultimate 64, though that hasn't been tested |
 
 These come from Heartbeat Soundtracker's own bundled `Heartbeat.cfg` (ships
-with the tracker itself, written for the original C64U). On a U64 Elite II,
-that file's `Turbo Control=C64U Turbo Registers` line is not a valid setting —
-confirmed directly against a live U64E2's own reported config choices (`Off`,
-`Manual`, `U64 Turbo Registers`, `TurboEnable Bit` — no `C64U Turbo Registers`
-at all) — and fails to load with an error. `Heartbeat-U64E2.cfg` is the same
-file with that one line changed to `Turbo Control=U64 Turbo Registers`;
-everything else is identical.
+with the tracker itself). Its `Turbo Control=C64U Turbo Registers` line is
+not a valid setting on a U64 Elite II — confirmed directly against a live
+U64E2's own reported config choices (`Off`, `Manual`, `U64 Turbo Registers`,
+`TurboEnable Bit` — no `C64U Turbo Registers` at all) — and fails to load
+with an error there. `Heartbeat-U64E2.cfg` is the same file with that one
+line changed to `Turbo Control=U64 Turbo Registers`; everything else is
+identical. The original Ultimate 64 probably uses that same `U64 Turbo
+Registers` setting (rather than `C64U Turbo Registers`), so
+`Heartbeat-U64E2.cfg` may well work there too — this hasn't been confirmed
+on that hardware.
 
 **Back up your current settings first** — loading either file overwrites your
 Audio Mixer, Speaker Mixer, UltiSID, SID Addressing, and U64/Cartridge settings
