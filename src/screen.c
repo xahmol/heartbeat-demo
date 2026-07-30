@@ -22,6 +22,13 @@ CharWin cw;
 
 static char p2smap[] = {0x40, 0x00, 0x40, 0x20, 0x40, 0xc0, 0x80, 0x80};
 
+// p2s — converts one PETSCII source byte to its screen-code equivalent
+// (the same transform petscii.h's charmap applies to string literals),
+// needed here because screen_header_line() builds a raw screen-code
+// buffer by hand instead of going through the normal charmap path.
+// Input:  ch — one PETSCII source byte
+// Output: the equivalent raw screen code
+// Syntax: unsigned char sc = p2s('A');
 static inline char p2s(char ch)
 {
   return ch ^ p2smap[ch >> 5];
@@ -32,6 +39,11 @@ static inline char p2s(char ch)
 // Exported (not just screen_init()'s internal helper) so other screens
 // (e.g. src/visualizer.c) can draw a matching header without duplicating
 // the p2s/reverse-video-bit logic.
+// Input:  row   — screen row 0-24 to draw on
+//         text  — text to center (source case; converted via p2s())
+//         color — text color (a COL_*/VCOL_* constant)
+// Output: none
+// Syntax: screen_header_line(0, "Heartbeat Tracker Player Demo", COL_HEADER1);
 // ---------------------------------------------------------------
 void screen_header_line(char row, const char *text, char color) {
     char buf[41];
@@ -50,7 +62,11 @@ void screen_header_line(char row, const char *text, char color) {
 }
 
 // ---------------------------------------------------------------
-// screen_init
+// screen_init — initialise VIC text mode (bank 0), clear the screen, draw
+// the two-line header.
+// Input:  subtitle — text for header line 1
+// Output: none
+// Syntax: screen_init("Hardware Detection  v1.0.0");
 // ---------------------------------------------------------------
 void screen_init(const char *subtitle) {
     // Lowercase+uppercase charset at VIC-II bank-0 address $1800
@@ -69,7 +85,13 @@ void screen_init(const char *subtitle) {
 }
 
 // ---------------------------------------------------------------
-// screen_result
+// screen_result — print one detection result line ("  LABEL : [ OK ] detail"
+// or "  LABEL : [FAIL] detail"), then advance to the next line.
+// Input:  label  — short label, e.g. "REU  "
+//         ok     — nonzero for "[ OK ]", 0 for "[FAIL]"
+//         detail — extra text shown after the badge
+// Output: none
+// Syntax: screen_result("REU  ", 1, "16 MB");
 // ---------------------------------------------------------------
 void screen_result(const char *label, char ok, const char *detail) {
     char badge_col  = ok ? COL_OK   : COL_FAIL;
@@ -86,7 +108,10 @@ void screen_result(const char *label, char ok, const char *detail) {
 }
 
 // ---------------------------------------------------------------
-// screen_info
+// screen_info — print a plain information line in COL_INFO, then newline.
+// Input:  msg — text to print
+// Output: none
+// Syntax: screen_info("Checking turbo mode...");
 // ---------------------------------------------------------------
 void screen_info(const char *msg) {
     cwin_put_string(&cw, msg, COL_INFO);
@@ -94,7 +119,11 @@ void screen_info(const char *msg) {
 }
 
 // ---------------------------------------------------------------
-// screen_hint  — keep msg <= 35 chars to fit in 40-col screen
+// screen_hint — print a hint/action line ("  -> msg") in COL_HINT, then
+// newline. Keep msg <= 35 chars to fit in the 40-col screen.
+// Input:  msg — hint text
+// Output: none
+// Syntax: screen_hint("Enable turbo in Ultimate firmware");
 // ---------------------------------------------------------------
 void screen_hint(const char *msg) {
     cwin_put_string(&cw, "  -> ", COL_HINT);
@@ -103,17 +132,24 @@ void screen_hint(const char *msg) {
 }
 
 // ---------------------------------------------------------------
-// screen_blank_line
+// screen_blank_line — output one blank line.
+// Input:  none
+// Output: none
+// Syntax: screen_blank_line();
 // ---------------------------------------------------------------
 void screen_blank_line(void) {
     cwin_cursor_newline(&cw);
 }
 
 // ---------------------------------------------------------------
-// screen_error_exit — shows error, waits for key, RETURNS.
-// Caller must immediately do `return 1`.
-// Note: the exit string is intentionally distinct from screen_wait_key
-// to prevent Oscar64 suffix-merging adjacent string literals.
+// screen_error_exit — shows error, waits for key, RETURNS. Caller must
+// immediately do `return 1`. Note: the exit string is intentionally
+// distinct from screen_wait_key's to prevent Oscar64 suffix-merging
+// adjacent string literals.
+// Input:  msg  — error message
+//         hint — optional follow-up hint, or NULL/empty for none
+// Output: none (see caller-contract note above)
+// Syntax: screen_error_exit("No UCI found.", "F2 > UCI Settings > Enable"); return 1;
 // ---------------------------------------------------------------
 void screen_error_exit(const char *msg, const char *hint) {
     screen_blank_line();
@@ -129,7 +165,11 @@ void screen_error_exit(const char *msg, const char *hint) {
 }
 
 // ---------------------------------------------------------------
-// screen_wait_key
+// screen_wait_key — print msg (or a default prompt) and wait for a
+// keypress, debounced against a key already held from a prior screen.
+// Input:  msg — prompt text, or NULL/empty for "Press any key to continue."
+// Output: none
+// Syntax: screen_wait_key("Press any key to start playback.");
 // ---------------------------------------------------------------
 void screen_wait_key(const char *msg) {
     char stable;

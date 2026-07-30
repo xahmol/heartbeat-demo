@@ -21,7 +21,11 @@ char          detected_turbo_class   = TURBO_NOT_PRESENT;
 unsigned char detected_audio_version = 0;
 
 // ---------------------------------------------------------------
-// detect_uci
+// detect_uci — poll uii_detect() for up to 10 seconds via the CIA1 TOD
+// clock (the Ultimate firmware needs time to boot before UCI responds).
+// Input:  none
+// Output: DETECT_OK if UCI registers respond, DETECT_FAIL otherwise
+// Syntax: if (!detect_uci()) { ... }
 // ---------------------------------------------------------------
 char detect_uci(void) {
     // Poll uii_detect() for up to 10 seconds via CIA1 TOD clock.
@@ -45,11 +49,21 @@ char detect_uci(void) {
 // the value at a real call boundary instead of assuming it away. Same fix
 // already applied in UBoot64-v2 (src/main.c). See oscar64manual.md for the
 // full diagnosis.
+// Input:  v — the REU probe byte just read back
+// Output: v, unchanged (the barrier's only purpose is to force materialization)
+// Syntax: if (reu_probe_barrier(d) == 0) { ... }
 // ---------------------------------------------------------------
 __noinline char reu_probe_barrier(char v) {
     return v;
 }
 
+// hbdemo_reu_count_pages — probes REU size by writing/reading a marker byte
+// at increasing 64KB-page offsets until one doesn't stick (i.e. wraps back
+// to an already-populated page), confirming the physical REU size.
+// Input:  none
+// Output: number of 64 KB pages detected (256 = 16 MB, 128 = 8 MB, etc.,
+//         0 = no REU present)
+// Syntax: int pages = hbdemo_reu_count_pages();
 static int hbdemo_reu_count_pages(void) {
     volatile char c, d;
 
@@ -83,10 +97,13 @@ static int hbdemo_reu_count_pages(void) {
 }
 
 // ---------------------------------------------------------------
-// detect_reu
-// Uses hbdemo_reu_count_pages() (see workaround above), which returns the
-// number of 64 KB pages (256 = 16 MB, 128 = 8 MB, etc.).
-// The test is non-destructive enough for startup detection.
+// detect_reu — uses hbdemo_reu_count_pages() (see workaround above) to
+// determine REU size. The test is non-destructive enough for startup
+// detection.
+// Input:  none
+// Output: detected size in MB (0 = absent/too small, 16 = 16 MB confirmed);
+//         also sets detected_reu_mb
+// Syntax: unsigned char mb = detect_reu();
 // ---------------------------------------------------------------
 unsigned char detect_reu(void) {
     int pages = hbdemo_reu_count_pages();
@@ -102,7 +119,12 @@ unsigned char detect_reu(void) {
 }
 
 // ---------------------------------------------------------------
-// detect_turbo
+// detect_turbo — calls turbo_detect() (turbo.h), which measures CIA1 timer
+// loop timing at 1 MHz vs maximum speed to classify the available turbo mode.
+// Input:  none
+// Output: DETECT_OK if turbo is present and active, DETECT_FAIL otherwise;
+//         also sets detected_turbo_class
+// Syntax: if (detect_turbo()) { ... }
 // ---------------------------------------------------------------
 char detect_turbo(void) {
     detected_turbo_class = turbo_detect();
@@ -110,7 +132,12 @@ char detect_turbo(void) {
 }
 
 // ---------------------------------------------------------------
-// detect_audio
+// detect_audio — calls audio_detect() (audio.h) to check for the Ultimate
+// Audio module.
+// Input:  none
+// Output: DETECT_OK if the module responds, DETECT_FAIL otherwise; also
+//         sets detected_audio_version
+// Syntax: if (detect_audio()) { ... }
 // ---------------------------------------------------------------
 char detect_audio(void) {
     if (audio_detect()) {

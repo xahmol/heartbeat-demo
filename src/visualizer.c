@@ -132,6 +132,9 @@ static unsigned char vis_row_count;
 // vis_getin — raw KERNAL GETIN, same rationale as the harness's previous
 // home in main.c: bypasses conio.h's getchx()/convch() to avoid fighting
 // this file's petscii.h charmap when comparing against raw key codes.
+// Input:  none
+// Output: none (result written to the file-scope vis_key global)
+// Syntax: vis_getin(); if (vis_key == 0x0D) { ... }
 // ---------------------------------------------------------------
 static unsigned char vis_key;
 static void vis_getin(void)
@@ -147,6 +150,10 @@ static void vis_getin(void)
 // the next free slot (column-major: fills column 0's 16 rows, then column
 // 1's). No-op once all VIS_TOTAL_SLOTS are in use (in practice never
 // happens -- 32 slots cover all 31 possible channels).
+// Input:  channel — hb_vis channel number (0-30; 0-6=UA, 7-30=SID)
+//         label   — 4-char row label to draw, e.g. "UA-3"/"S2-1"
+// Output: none
+// Syntax: vis_add_row(0, "UA-0");
 // ---------------------------------------------------------------
 static void vis_add_row(unsigned char channel, const char *label)
 {
@@ -167,6 +174,9 @@ static void vis_add_row(unsigned char channel, const char *label)
 // chips (matches hb_init_sid_image_and_volumes()'s own reading of this
 // table) and lay out rows: all 7 UA channels first, then 3 rows per
 // populated SID chip in chip order.
+// Input:  none (reads the currently-loaded hb_songdata)
+// Output: none (rebuilds vis_channel_row[]/vis_row_count and draws labels)
+// Syntax: vis_build_layout(); // call after cwin_clear() + any song (re)load
 // ---------------------------------------------------------------
 static void vis_build_layout(void)
 {
@@ -216,6 +226,11 @@ static void vis_build_layout(void)
 // reading live screen RAM while the bug was present). screen.c's
 // header_line()/screen_header_line() sidesteps the same trap the same
 // way, for the same reason.
+// Input:  slot  — slot index 0..VIS_TOTAL_SLOTS-1 (col = slot/VIS_ROWS_PER_COL,
+//                 row = slot%VIS_ROWS_PER_COL)
+//         level — current bar level, 0-63
+// Output: none
+// Syntax: vis_draw_row(0, vis_row_level[0]);
 // ---------------------------------------------------------------
 static void vis_draw_row(unsigned char slot, unsigned char level)
 {
@@ -282,6 +297,13 @@ static const unsigned char vis_pcolor[8] = {
 };
 static unsigned char vis_plasma_phase;
 
+// vis_draw_plasma_span — paints one row's worth of plasma cells across a
+// given column span, using the 2-sine interference lookup (vis_psin).
+// Input:  x0    — leftmost screen column of the span
+//         width — number of columns to paint
+//         y     — screen row to paint
+// Output: none
+// Syntax: vis_draw_plasma_span((unsigned char)VIS_COL_BAR_X(0), VIS_COL_BAR_WIDTH, 3);
 static void vis_draw_plasma_span(unsigned char x0, unsigned char width, char y)
 {
     unsigned char i;
@@ -295,6 +317,13 @@ static void vis_draw_plasma_span(unsigned char x0, unsigned char width, char y)
     }
 }
 
+// vis_draw_plasma — repaints the whole plasma background for one frame
+// (both columns, every row) and advances the animation phase. See the
+// section comment above for why this must run unconditionally, every
+// frame, before the bars draw on top.
+// Input:  none
+// Output: none (advances vis_plasma_phase by 1 each call)
+// Syntax: vis_draw_plasma(); // call once per frame, before vis_decay_and_draw()
 static void vis_draw_plasma(void)
 {
     unsigned char row, col;
@@ -318,6 +347,9 @@ static void vis_draw_plasma(void)
 // green/yellow/red convention and peak-then-decay behaviour as the VU bars
 // (see vis_draw_row()). Genuinely reacts to whatever's playing since it
 // reads the same live event data.
+// Input:  none (reads the file-scope spec_level[] array)
+// Output: none
+// Syntax: vis_draw_spectroscope(); // called once per frame by vis_decay_and_draw()
 // ---------------------------------------------------------------
 #define SPEC_BUCKETS VIS_BAR_WIDTH
 static unsigned char spec_level[SPEC_BUCKETS];
@@ -350,6 +382,9 @@ static void vis_draw_spectroscope(void)
 // -- same accepted tradeoff as this project's existing unsynchronized
 // read of hb_ext_out), fine for a visual-only, non-correctness-critical
 // display.
+// Input:  none (reads hb_vis_events[]/hb_vis_event_count and drains them)
+// Output: none
+// Syntax: vis_decay_and_draw(); // call once per VIC frame
 // ---------------------------------------------------------------
 static void vis_decay_and_draw(void)
 {
@@ -419,6 +454,9 @@ static const unsigned char vis_spritefont[4096] = {
 // (confirmed by inspecting the extracted glyphs): 0='@', 1-26='A'-'Z',
 // 32=space, 45='-', 46='.', 48-57='0'-'9'. Anything else falls back to space
 // rather than showing a wrong/garbage glyph.
+// Input:  ch — one plain-ASCII scrolltext character
+// Output: sprite font glyph index (0-63) to pass to spr_set()'s image param
+// Syntax: unsigned char glyph = vis_font_index('A'); // -> 1
 static unsigned char vis_font_index(char ch)
 {
     if (ch == ' ')  return 32;
@@ -473,6 +511,13 @@ static int           vis_scroll_base_y;
 static signed char vis_scroll_dir;
 static unsigned char vis_scroll_ripple_phase;
 
+// vis_scroll_init — one-time scroller setup: points the hardware sprite
+// system at the visualiser's screen (for its sprite-pointer bytes), copies
+// the sprite font into VIC bank 2, and resets all scroll/bounce/ripple
+// state to its starting position.
+// Input:  none
+// Output: none
+// Syntax: vis_scroll_init(); // call once, after vis_screen_init()'s charset setup
 static void vis_scroll_init(void)
 {
     spr_init(VIS_BANK2_SCREEN);
@@ -492,6 +537,9 @@ static void vis_scroll_init(void)
 // vis_draw_plasma() uses) on top of that baseline -- together giving both
 // halves of the requested look: an overall vertical bounce plus the
 // classic letter-by-letter "sine scroller" undulation.
+// Input:  none (advances the file-scope scroll/bounce/ripple state)
+// Output: none (writes all 8 hardware sprites' position/image/colour)
+// Syntax: vis_scroll_update(); // call once per frame
 static void vis_scroll_update(void)
 {
     unsigned char i;
@@ -562,6 +610,9 @@ static void vis_scroll_update(void)
 // data instead -- SEI/CLI around the whole switch+copy+restore sequence
 // makes that impossible. One-time startup cost only (not per-frame), so
 // the brief IRQ-disabled window is negligible even at 1 MHz.
+// Input:  none
+// Output: none
+// Syntax: vis_setup_charset(); // call once, before vic_setmode() switches to bank 2
 // ---------------------------------------------------------------
 static void vis_setup_charset(void)
 {
@@ -588,6 +639,10 @@ static void vis_setup_charset(void)
 // long song name can never overflow `out` -- screen_header_line()'s own
 // centering math assumes its input is already <=40 chars and does not
 // itself guard against a longer string.
+// Input:  out    — destination buffer, must have room for maxlen+1 bytes
+//         maxlen — maximum characters to write (excluding NUL terminator)
+// Output: none (result written to out, NUL-terminated)
+// Syntax: char subtitle[41]; vis_build_subtitle(subtitle, 40);
 // ---------------------------------------------------------------
 static void vis_build_subtitle(char *out, char maxlen)
 {
@@ -611,6 +666,9 @@ static void vis_build_subtitle(char *out, char maxlen)
 // once at startup and again after a song switch, since a different song
 // can populate a different set of channels (stale labels from the previous
 // song must be cleared, not just overwritten in place).
+// Input:  none
+// Output: none
+// Syntax: vis_draw_static_screen(); // call at startup and after a song switch
 // ---------------------------------------------------------------
 static void vis_draw_static_screen(void)
 {
@@ -636,6 +694,9 @@ static void vis_draw_static_screen(void)
 // song may populate a different set of channels). On load failure, leaves
 // the previous song's index/state alone rather than restarting with
 // (now-overwritten, partially-loaded) garbage song data.
+// Input:  none (cycles vis_song_index to the next entry in vis_song_files[])
+// Output: none
+// Syntax: vis_switch_song(); // called from visualizer_run() when 'S' is pressed
 // ---------------------------------------------------------------
 static void vis_switch_song(void)
 {
@@ -661,6 +722,9 @@ static void vis_switch_song(void)
 // this is a DIFFERENT bank than screen.c's detection screen, which is
 // fine: only one bank is ever "active" at a time, and the whole screen is
 // torn down and rebuilt on this transition anyway.
+// Input:  none
+// Output: none
+// Syntax: vis_screen_init(); // called once from visualizer_run()
 // ---------------------------------------------------------------
 static void vis_screen_init(void)
 {
@@ -677,7 +741,7 @@ static void vis_screen_init(void)
 }
 
 // ---------------------------------------------------------------
-// visualizer_run — see visualizer.h.
+// visualizer_run — see visualizer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void visualizer_run(void)
 {

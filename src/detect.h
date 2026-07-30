@@ -27,27 +27,31 @@ extern unsigned char detected_audio_version;
 
 char detect_uci(void);
 // Poll uii_detect() with up to 10-second timeout.
-// Returns DETECT_OK if UCI registers respond ($DF1D = $C9),
-// DETECT_FAIL otherwise.
+// Input:  none
+// Output: DETECT_OK if UCI registers respond ($DF1D = $C9), DETECT_FAIL otherwise
+// Syntax: if (!detect_uci()) { screen_error_exit("No UCI found.", "..."); return 1; }
 
 unsigned char detect_reu(void);
 // Write/read test patterns at REU addresses 0 and $F00000.
-// Returns detected size in MB:
-//   0  = REU absent or smaller than 16 MB
-//   16 = 16 MB REU confirmed
-// Also sets detected_reu_mb.
+// Input:  none
+// Output: detected size in MB (0 = REU absent or smaller than 16 MB, 16 = 16 MB
+//         REU confirmed); also sets detected_reu_mb
+// Syntax: unsigned char mb = detect_reu(); if (mb < 16) { ... }
 
 char detect_turbo(void);
 // Call turbo_detect() (from turbo.h) which measures CIA1 timer
 // loop timing at 1 MHz vs maximum speed.
-// Returns DETECT_OK if turbo registers are present and active,
-// DETECT_FAIL if $D031 == $FF or no speedup measurable.
-// Also sets detected_turbo_class.
+// Input:  none
+// Output: DETECT_OK if turbo registers are present and active, DETECT_FAIL if
+//         $D031 == $FF or no speedup measurable; also sets detected_turbo_class
+// Syntax: if (detect_turbo()) { ... check detected_turbo_class ... }
 
 char detect_audio(void);
 // Call audio_detect() (from audio.h).
-// Returns DETECT_OK if Ultimate Audio module responds.
-// Also sets detected_audio_version.
+// Input:  none
+// Output: DETECT_OK if Ultimate Audio module responds, DETECT_FAIL otherwise;
+//         also sets detected_audio_version
+// Syntax: if (detect_audio()) { ... use detected_audio_version ... }
 
 #pragma compile("detect.c")
 

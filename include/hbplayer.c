@@ -84,6 +84,7 @@ unsigned char     hb_vis_event_count;
 // numbering.
 // =================================================================
 
+// hb_vis_reset — see hbplayer.h for the full Input/Output/Syntax.
 void hb_vis_reset(void)
 {
     unsigned char i;
@@ -104,6 +105,12 @@ void hb_vis_reset(void)
 // intermediate step (max possible value before the final clamp is 165),
 // so this is safe as plain unsigned char arithmetic with no wraparound
 // concerns, unlike some of this port's other ported arithmetic.
+// Input:  sr — envelope sustain/release byte (sustain in high nibble,
+//              release in low nibble)
+//         ad — envelope attack/decay byte (attack in high nibble, decay
+//              in low nibble)
+// Output: perceptual loudness weight, clamped to 0-63
+// Syntax: unsigned char w = hb_vis_adsr_weight(c->sid_env_sr, c->sid_env_ad);
 // ---------------------------------------------------------------
 static unsigned char hb_vis_adsr_weight(unsigned char sr, unsigned char ad)
 {
@@ -125,6 +132,12 @@ static unsigned char hb_vis_adsr_weight(unsigned char sr, unsigned char ad)
 // Called unconditionally at the top of hb_play_sid_note(), before the
 // tied-note check (matches the original calling this before its own
 // tied-note branch).
+// Input:  note    — note pitch being triggered
+//         sid_idx — SID chip index, 0-7
+//         ch_idx  — channel within that chip, 0-2
+//         sound   — instrument/sample number
+// Output: none (writes the CURRENT, not-yet-committed hb_vis_events[] slot)
+// Syntax: hb_vis_sid_note(note, sid_idx, ch_idx, sample_num);
 // ---------------------------------------------------------------
 static void hb_vis_sid_note(unsigned char note, unsigned char sid_idx, unsigned char ch_idx, unsigned char sound)
 {
@@ -140,6 +153,11 @@ static void hb_vis_sid_note(unsigned char note, unsigned char sid_idx, unsigned 
 // VisualizerSIDHalfVelocity (half velocity, tied note) -- `half` selects
 // between them. Commits the current event slot and advances the write
 // index (wrapping at HB_VIS_MAX_EVENTS, matching the original).
+// Input:  sr   — envelope sustain/release byte
+//         ad   — envelope attack/decay byte
+//         half — nonzero to halve the computed velocity (tied-note case)
+// Output: none (commits and advances hb_vis_event_count)
+// Syntax: hb_vis_sid_commit(c->sid_env_sr, c->sid_env_ad, 0); // real note
 static void hb_vis_sid_commit(unsigned char sr, unsigned char ad, char half)
 {
     unsigned char weight = hb_vis_adsr_weight(sr, ad);
@@ -173,6 +191,11 @@ static void hb_vis_sid_commit(unsigned char sr, unsigned char ad, char half)
 // produces $C1 via 8-bit wraparound, not a small "clean" number.
 // Unexplained in the source beyond its own comment -- likely just a
 // display/palette convention of the original author's own visualizer.
+// Input:  note   — note pitch being triggered
+//         ua_idx — Ultimate Audio channel, 0-6
+//         sound  — sample number (1-64), reversed before storing (see above)
+// Output: none (writes the CURRENT, not-yet-committed hb_vis_events[] slot)
+// Syntax: hb_vis_sample_note(raw_note, ua_idx, sample_num);
 // ---------------------------------------------------------------
 static void hb_vis_sample_note(unsigned char note, unsigned char ua_idx, unsigned char sound)
 {
@@ -196,6 +219,9 @@ static void hb_vis_sample_note(unsigned char note, unsigned char ua_idx, unsigne
 // (tied-note branch, half of last_volume) and hb_trigger_sample() (real
 // note, sample's own volume) -- both reachable from hb_play_fx() too,
 // since hb_trigger_sample() is PlayFX's shared continuation.
+// Input:  volume — velocity/volume value to store (0-63 range expected)
+// Output: none (commits and advances hb_vis_event_count)
+// Syntax: hb_vis_sample_velocity(sp->volume);
 static void hb_vis_sample_velocity(unsigned char volume)
 {
     unsigned char i = hb_vis_event_count;
@@ -220,6 +246,7 @@ static void hb_vis_sample_velocity(unsigned char volume)
 // scan/open/chunked-load pattern already proven in
 // UltimateDemo2026/src/main.c (drive scan) and
 // UltimateDemo2026/include/modplay.c's modplay_load (chunked uii_load_reu).
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 char hb_load(char *filename, unsigned long reu_addr)
 {
@@ -315,6 +342,7 @@ char hb_load(char *filename, unsigned long reu_addr)
 // this is a third confirmed instance of Oscar64 not tracking inline-asm
 // side effects for its dataflow analysis, distinct from (but same family
 // as) the reu_count_pages() bug fixed in detect.c.
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 static unsigned char hb_ntsc_probe;
 
@@ -352,6 +380,12 @@ char hb_detect_ntsc(void)
 // deliberately skipping the UA reset -- this is the reference player's
 // actual behavior, ported as-is for exactness).
 // ---------------------------------------------------------------
+// hb_init_sid_image_and_volumes — port of InitSIDImageAndVolumes: zeroes
+// all SID working state, then re-reads each chip's address/volume from
+// the currently-loaded hb_songdata.
+// Input:  none (reads hb_songdata.sid_addresses[]/sid_volumes[])
+// Output: none (resets hb_sids[])
+// Syntax: hb_init_sid_image_and_volumes(); // called by hb_stop_all()
 static void hb_init_sid_image_and_volumes(void)
 {
     unsigned char i;
@@ -365,6 +399,13 @@ static void hb_init_sid_image_and_volumes(void)
     }
 }
 
+// hb_init_ua_and_sids — port of InitUltimateAudioAndSIDs: zeroes all UA
+// channel working state, then falls through into
+// hb_init_sid_image_and_volumes() to reset SID state too (unlike
+// hb_stop_all(), which calls only the SID half).
+// Input:  none
+// Output: none (resets hb_ua[] and hb_sids[])
+// Syntax: hb_init_ua_and_sids(); // called by hb_init()
 static void hb_init_ua_and_sids(void)
 {
     unsigned char ch;
@@ -391,6 +432,7 @@ static void hb_init_ua_and_sids(void)
 // php/plp (not sei/cli) to match the original exactly: this may be called
 // from within the tick IRQ via a Bt track command, where unconditionally
 // re-enabling interrupts at the end (cli) would be wrong.
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_set_tempo(unsigned char bpm_minus_64)
 {
@@ -421,6 +463,7 @@ void hb_set_tempo(unsigned char bpm_minus_64)
 // only resets SID working state (jmp InitSIDImageAndVolumes in the
 // original skips the UA channel reset entirely -- ported as-is, not
 // "fixed", since bit-exact parity with the reference player is the goal).
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_stop_all(void)
 {
@@ -429,8 +472,8 @@ void hb_stop_all(void)
 }
 
 // Forward declarations -- implementations are below hb_fetch_pattern_row()
-// (Phases 6-7: SID/UA note trigger + shadow flush). Kept as static
-// internals, not part of the public API in hbplayer.h.
+// (SID/UA note trigger + shadow flush). Kept as static internals, not part
+// of the public API in hbplayer.h.
 static void hb_sid_hard_restart(void);
 static void hb_early_gate_on(void);
 static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned char sample_idx);
@@ -462,6 +505,11 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte);
 // body grows: re-verify via -g build + .asm whenever a change adds a new
 // call into this function's tree (PlayFX/StopFX are NOT called from it,
 // so shouldn't affect this -- but re-check anyway).
+// Input:  none (reads/advances hb_state; not part of the public API --
+//         called only from hb_irq's raw __asm dispatch, never directly)
+// Output: none
+// Syntax: not called directly -- fires ~195 Hz via CIA1 Timer A once
+//         hb_init() has installed hb_irq at $0314/$0315
 // ---------------------------------------------------------------
 __interrupt void hb_tick(void)
 {
@@ -521,8 +569,8 @@ __interrupt void hb_tick(void)
 // branches to $EA81 (a KERNAL entry point *past* its own internal SCNKEY
 // call, skipping a double-scan against the raster branch's manual SCNKEY).
 //
-// PORT DEVIATION (hardware-tested, 2026-07-29): chaining to $EA81 here
-// causes hb_tick to stop being invoked after only ~2 firings (confirmed via
+// PORT DEVIATION (hardware-tested): chaining to $EA81 here causes hb_tick
+// to stop being invoked after only ~2 firings (confirmed via
 // a free-running debug counter that should climb continuously but instead
 // plateaus within milliseconds) -- with no crash and the keyboard still
 // responding, consistent with hitting an unprotected KERNAL/BASIC-ROM-
@@ -563,6 +611,10 @@ __interrupt void hb_tick(void)
 // Manually saved/restored here around the hb_tick call, following the
 // same method as modplay_irq's documented gap analysis in
 // UltimateDemo2026/include/modplay.c.
+// Input:  none (hardware-invoked IRQ handler, not called directly)
+// Output: none
+// Syntax: *((void **)0x0314) = hb_irq; // install once, in hb_init() -- a
+//         named __asm block is an ADDRESS, never call it as hb_irq()
 // ---------------------------------------------------------------
 __asm hb_irq
 {
@@ -586,6 +638,7 @@ hb_irq_raster:
 // ---------------------------------------------------------------
 // hb_init — port of PlayerInit. Installs the tick IRQ and resets player
 // state. Call hb_detect_ntsc() before this.
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 {
@@ -648,6 +701,7 @@ void hb_init(unsigned char seq_start_pos, unsigned char play_mode)
 // implemented -- the standalone player itself never uses it either. The
 // fallback below just loops the current pattern from row 0 instead of
 // reading the (unimplemented) PatternBuffer at $C000.
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_fetch_pattern_row(void)
 {
@@ -727,6 +781,10 @@ void hb_fetch_pattern_row(void)
 // the table page) -- re-expressed here as ordinary indexing + a shift,
 // verified mathematically equivalent:
 //   shift = 7 - (Y/3), page = (Y%3)*256   [Y = octave-folded input, see below]
+// Input:  freq_hi, freq_lo — 16-bit linear frequency ("note << 6" internal
+//                            fixed-point unit), split into high/low bytes
+// Output: 16-bit SID frequency register value ($D400/$D407/$D40E etc.)
+// Syntax: unsigned reg = hb_get_sid_freq(c->base_freq_hi, c->base_freq_lo);
 // ---------------------------------------------------------------
 static unsigned hb_get_sid_freq(unsigned char freq_hi, unsigned char freq_lo)
 {
@@ -762,6 +820,10 @@ static unsigned hb_get_sid_freq(unsigned char freq_hi, unsigned char freq_lo)
 // its 3 channels' gates (key-up) on the transition INTO mute (matching
 // the original's LastSIDMutes comparison), so a note doesn't hang when
 // muted mid-play.
+// Input:  sid_idx — SID chip index, 0-7
+// Output: 1 if the chip is muted this step, 0 if not (also force-releases
+//         the chip's 3 channel gates on the not-muted-to-muted transition)
+// Syntax: if (hb_check_sid_mute(sid_idx)) continue;
 // ---------------------------------------------------------------
 static char hb_check_sid_mute(unsigned char sid_idx)
 {
@@ -788,6 +850,9 @@ static char hb_check_sid_mute(unsigned char sid_idx)
 // envelope/waveform/frequency to a clean silent state ahead of the real
 // note-on, avoiding audible artifacts from whatever the previous note
 // left behind.
+// Input:  none (reads hb_row_buf[]/hb_songdata, updates hb_sids[])
+// Output: none
+// Syntax: hb_sid_hard_restart(); // called by hb_tick() at tick==hardrestart_time
 // ---------------------------------------------------------------
 static void hb_sid_hard_restart(void)
 {
@@ -830,6 +895,9 @@ static void hb_sid_hard_restart(void)
 // but reads the CURRENT row's about-to-play instrument's ADSR directly
 // (not a fixed silence template) and sets a fixed waveform byte from the
 // song data (hardrestart_gateon_wave) rather than clearing it.
+// Input:  none (reads hb_row_buf[]/hb_songdata, updates hb_sids[])
+// Output: none
+// Syntax: hb_early_gate_on(); // called by hb_tick() at tick==hardrestart_gateon_time
 // ---------------------------------------------------------------
 static void hb_early_gate_on(void)
 {
@@ -888,6 +956,11 @@ static const unsigned char hb_channel_ora[3] = { 0x01, 0x02, 0x04 };
 // itself compute SIDFreq or the initial waveform -- matches the original,
 // which leaves both to ModulateChannel's first pass after trigger, not
 // PlaySIDNote itself.
+// Input:  sid_idx — SID chip index, 0-7
+//         ch_idx  — channel within that chip, 0-2
+//         note    — note pitch to trigger (raw pattern-row note byte)
+// Output: none (updates hb_sids[sid_idx].ch[ch_idx] working state)
+// Syntax: hb_play_sid_note(sid_idx, ch_idx, transposed_note);
 // ---------------------------------------------------------------
 static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsigned char note)
 {
@@ -1041,6 +1114,9 @@ static void hb_play_sid_note(unsigned char sid_idx, unsigned char ch_idx, unsign
 // the UA dispatch (hb_play_pattern_row_ua()) have run. Doing it here
 // instead would make the UA loop's mute-transition check always compare
 // the current row's mutes against itself instead of the previous row's.
+// Input:  none (reads hb_row_buf[]/hb_state, updates hb_sids[])
+// Output: none
+// Syntax: hb_play_pattern_row_sid(); // called by hb_play_pattern_row()
 // ---------------------------------------------------------------
 static void hb_play_pattern_row_sid(void)
 {
@@ -1092,7 +1168,10 @@ static void hb_play_pattern_row_sid(void)
 // 8-bit-hi register pair with a bit gap -- verified algebraically
 // equivalent to the original's separate lo/hi shift sequences by working
 // the derivation through both ways and confirming the same bit positions
-// result (see commit history for the derivation).
+// result.
+// Input:  chip — pointer to the SID chip whose register image to flush
+// Output: none (writes directly to the chip's real hardware registers)
+// Syntax: hb_write_one_sid(&hb_sids[i]);
 // ---------------------------------------------------------------
 static void hb_write_one_sid(hb_sid_chip_t *chip)
 {
@@ -1120,6 +1199,11 @@ static void hb_write_one_sid(hb_sid_chip_t *chip)
     }
 }
 
+// hb_register_update_sid — flushes every populated SID chip's register
+// image to hardware via hb_write_one_sid().
+// Input:  none
+// Output: none
+// Syntax: hb_register_update_sid(); // called by hb_register_update()
 static void hb_register_update_sid(void)
 {
     unsigned char i;
@@ -1141,6 +1225,10 @@ static void hb_register_update_sid(void)
 // (a plain 16-bit `v -= 1` in C already wraps/borrows correctly, so no
 // separate borrow-flag logic is needed here). Clock-independent (fixed
 // 6.25MHz UA reference) -- no NTSC variant, unlike the SID table.
+// Input:  freq_hi, freq_lo — 16-bit linear frequency ("note << 6" internal
+//                            fixed-point unit), split into high/low bytes
+// Output: Ultimate Audio playback rate register value
+// Syntax: unsigned rate = hb_get_ultimate_freq((unsigned char)(linear >> 8), (unsigned char)linear);
 // ---------------------------------------------------------------
 static unsigned hb_get_ultimate_freq(unsigned char freq_hi, unsigned char freq_lo)
 {
@@ -1183,6 +1271,10 @@ static unsigned hb_get_ultimate_freq(unsigned char freq_hi, unsigned char freq_l
 // (matching the original's own direct pokes), and only defers the final
 // gate-trigger byte into hb_ua[].shadow_gate for hb_register_update_ua()
 // to flush.
+// Input:  ua_idx   — Ultimate Audio channel, 0-6
+//         raw_note — note pitch from the pattern row, before the "+9" adjust
+// Output: none (updates hb_ua[ua_idx] and/or writes hardware directly)
+// Syntax: hb_play_sample_note(ua_idx, note);
 // ---------------------------------------------------------------
 static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
 {
@@ -1235,6 +1327,12 @@ static void hb_play_sample_note(unsigned char ua_idx, unsigned char raw_note)
 // check) and hb_play_fx() (which has no row buffer / tied-note concept at
 // all and jumps straight here in the original). `note` is the
 // already-"+9"-adjusted note value; `sample_idx` is 0-63 (already -1'd).
+// Input:  ua_idx     — Ultimate Audio channel, 0-6
+//         note       — already "+9"-adjusted note pitch
+//         sample_idx — sample/instrument index, 0-63 (already -1 from the
+//                      1-64 song-data sample number)
+// Output: none (updates hb_ua[ua_idx] and writes hardware directly)
+// Syntax: hb_trigger_sample(ua_idx, note, sample_num - 1);
 // ---------------------------------------------------------------
 static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned char sample_idx)
 {
@@ -1289,9 +1387,8 @@ static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned
         loop_mode = (unsigned char)(sp->flags & 0x03);
         c->loop_mode = loop_mode;
 
-        // Sample REU address = 0x01000000 | (reu_bank << 16) -- traced and
-        // confirmed exact against the reference during the port-plan design
-        // pass (every sample begins at a 64KB-aligned REU offset).
+        // Sample REU address = 0x01000000 | (reu_bank << 16) -- every sample
+        // begins at a 64KB-aligned REU offset.
         sample_addr = 0x01000000UL | ((unsigned long)sp->reu_bank << 16);
         length = (unsigned long)sp->length[0] |
                  ((unsigned long)sp->length[1] << 8) |
@@ -1357,6 +1454,9 @@ static void hb_trigger_sample(unsigned char ua_idx, unsigned char note, unsigned
 
 // ---------------------------------------------------------------
 // hb_stop_sample_note — port of StopSampleNote.
+// Input:  ua_idx — Ultimate Audio channel, 0-6
+// Output: none (defers a release/off byte into hb_ua[ua_idx].shadow_gate)
+// Syntax: hb_stop_sample_note(ua_idx);
 // ---------------------------------------------------------------
 static void hb_stop_sample_note(unsigned char ua_idx)
 {
@@ -1373,6 +1473,9 @@ static void hb_stop_sample_note(unsigned char ua_idx)
 // (see the Cmd8x_* track-command dispatch section below) -- skipped here.
 // See hb_play_pattern_row_sid()'s comment for why last_ua_mutes isn't
 // updated here either.
+// Input:  none (reads hb_row_buf[]/hb_state, updates hb_ua[])
+// Output: none
+// Syntax: hb_play_pattern_row_ua(); // called by hb_play_pattern_row()
 // ---------------------------------------------------------------
 static void hb_play_pattern_row_ua(void)
 {
@@ -1411,6 +1514,9 @@ static void hb_play_pattern_row_ua(void)
 // ---------------------------------------------------------------
 // hb_register_update_ua — UA half of RegisterUpdate: flush the deferred
 // shadow_gate control byte to hardware for all 7 UA channels.
+// Input:  none
+// Output: none
+// Syntax: hb_register_update_ua(); // called by hb_register_update()
 // ---------------------------------------------------------------
 static void hb_register_update_ua(void)
 {
@@ -1430,6 +1536,9 @@ static void hb_register_update_ua(void)
 // then the SID and UA halves in the same order as the original, and does
 // the once-per-row mute-state/tick-reset update only after all three
 // have run.
+// Input:  none (reads hb_row_buf[]/hb_state)
+// Output: none (resets hb_state.tick for the next row)
+// Syntax: hb_play_pattern_row(); // called by hb_tick() at tick==0
 // ---------------------------------------------------------------
 static void hb_play_pattern_row(void)
 {
@@ -1445,6 +1554,11 @@ static void hb_play_pattern_row(void)
     hb_state.tick = hb_state.tempo_ticks;
 }
 
+// hb_register_update — flushes both SID and UA register images to
+// hardware. Runs every tick regardless of play_mode (see hb_tick()).
+// Input:  none
+// Output: none
+// Syntax: hb_register_update(); // called by hb_tick() every tick
 static void hb_register_update(void)
 {
     hb_register_update_sid();
@@ -1471,6 +1585,9 @@ static void hb_register_update(void)
 unsigned char hb_ext_out;
 
 // ---- Cmd80 Pa: pan (UA only; ignored on SID/Cmd) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — pan value, low nibble
+// Output: none
+// Syntax: hb_cmd_pa_ua(ua_idx, param);
 static void hb_cmd_pa_ua(unsigned char ua_idx, unsigned char param)
 {
     hb_ua[ua_idx].last_pan = (unsigned char)(param & 0x0F); // stored; applied via freq/rate path already
@@ -1484,12 +1601,18 @@ static void hb_cmd_pa_ua(unsigned char ua_idx, unsigned char param)
 }
 
 // ---- Cmd81 Bt: BPM tempo (all channel types) ----
+// Input:  param — new tempo, encoded as BPM-64
+// Output: none
+// Syntax: hb_cmd_bt(param);
 static void hb_cmd_bt(unsigned char param)
 {
     hb_set_tempo(param);
 }
 
 // ---- Cmd82 Dn: slide down (UA/SID single-channel; Cmd = all channels) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — portamento speed
+// Output: none (retargets portamento toward frequency 0)
+// Syntax: hb_cmd_dn_ua(ua_idx, param);
 static void hb_cmd_dn_ua(unsigned char ua_idx, unsigned char param)
 {
     hb_ua_channel_t *c = &hb_ua[ua_idx];
@@ -1498,6 +1621,10 @@ static void hb_cmd_dn_ua(unsigned char ua_idx, unsigned char param)
     c->target_freq_hi = 0;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — portamento speed
+// Output: none (retargets portamento toward frequency 0)
+// Syntax: hb_cmd_dn_sid(sid_idx, ch_idx, param);
 static void hb_cmd_dn_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
@@ -1509,6 +1636,10 @@ static void hb_cmd_dn_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned 
 // Shared by Cmd82_Dn (Cmd channel) and Cmd88_Up (Cmd channel) -- slides
 // ALL SID + UA channels at once, matching Cmd82_Dn_SlideDown_Cmd/
 // Cmd88_Up_SlideUp_Cmd's shared ".common" tail in the original.
+// Input:  param             — portamento speed
+//         target_lo/target_hi — target linear frequency to slide toward
+// Output: none
+// Syntax: hb_cmd_slide_all(param, 0, 0); // slide down (target $0000)
 static void hb_cmd_slide_all(unsigned char param, unsigned char target_lo, unsigned char target_hi)
 {
     unsigned char i, ch;
@@ -1528,6 +1659,9 @@ static void hb_cmd_slide_all(unsigned char param, unsigned char target_lo, unsig
 }
 
 // ---- Cmd83 Fi: finetune (UA/SID; ignored on Cmd) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — signed finetune value
+// Output: none
+// Syntax: hb_cmd_fi_ua(ua_idx, param);
 static void hb_cmd_fi_ua(unsigned char ua_idx, unsigned char param)
 {
     hb_ua_channel_t *c = &hb_ua[ua_idx];
@@ -1535,6 +1669,10 @@ static void hb_cmd_fi_ua(unsigned char ua_idx, unsigned char param)
     c->finetune_hi = ((signed char)param < 0) ? 0xFF : 0x00;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — signed finetune value
+// Output: none
+// Syntax: hb_cmd_fi_sid(sid_idx, ch_idx, param);
 static void hb_cmd_fi_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
@@ -1544,11 +1682,17 @@ static void hb_cmd_fi_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned 
 
 // ---- Cmd84 Iv: SID volume (current chip on SID channel; ALL chips on
 // UA/Cmd channels -- low nibble only, filter type nibble preserved) ----
+// Input:  sid_idx — SID chip, 0-7; param — volume, low nibble used (0-15)
+// Output: none
+// Syntax: hb_cmd_iv_sid(sid_idx, param);
 static void hb_cmd_iv_sid(unsigned char sid_idx, unsigned char param)
 {
     hb_sids[sid_idx].volume = (unsigned char)((hb_sids[sid_idx].volume & 0xF0) | (param & 0x0F));
 }
 
+// Input:  param — volume, low nibble used (0-15), applied to every SID chip
+// Output: none
+// Syntax: hb_cmd_iv_all(param);
 static void hb_cmd_iv_all(unsigned char param)
 {
     unsigned char i;
@@ -1557,12 +1701,18 @@ static void hb_cmd_iv_all(unsigned char param)
 }
 
 // ---- Cmd85 Le: pattern length (all channel types), clamped to 64 ----
+// Input:  param — new pattern length, clamped to a max of 64 (0x40)
+// Output: none
+// Syntax: hb_cmd_le(param);
 static void hb_cmd_le(unsigned char param)
 {
     hb_state.patt_length = (param < 0x40) ? param : 0x40;
 }
 
 // ---- Cmd86 Co: filter cutoff (SID only; ignored on UA/Cmd) ----
+// Input:  sid_idx — SID chip, 0-7; param — cutoff value
+// Output: none
+// Syntax: hb_cmd_co(sid_idx, param);
 static void hb_cmd_co(unsigned char sid_idx, unsigned char param)
 {
     unsigned v = ((unsigned)param) << 5; // matches 3x lsr/ror -> effectively <<5 into a 16-bit split
@@ -1571,17 +1721,27 @@ static void hb_cmd_co(unsigned char sid_idx, unsigned char param)
 }
 
 // ---- Cmd87 Po: portamento speed only, no target change (UA/SID; ignored on Cmd) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — portamento speed
+// Output: none
+// Syntax: hb_cmd_po_ua(ua_idx, param);
 static void hb_cmd_po_ua(unsigned char ua_idx, unsigned char param)
 {
     hb_ua[ua_idx].portamento = param;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — portamento speed
+// Output: none
+// Syntax: hb_cmd_po_sid(sid_idx, ch_idx, param);
 static void hb_cmd_po_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     hb_sids[sid_idx].ch[ch_idx].portamento = param;
 }
 
 // ---- Cmd88 Up: slide up (UA/SID single-channel; Cmd = all channels) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — portamento speed
+// Output: none (retargets portamento toward the fixed high frequency $17C0)
+// Syntax: hb_cmd_up_ua(ua_idx, param);
 static void hb_cmd_up_ua(unsigned char ua_idx, unsigned char param)
 {
     hb_ua_channel_t *c = &hb_ua[ua_idx];
@@ -1590,6 +1750,10 @@ static void hb_cmd_up_ua(unsigned char ua_idx, unsigned char param)
     c->target_freq_hi = 0x17;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — portamento speed
+// Output: none (retargets portamento toward the fixed high frequency $17C0)
+// Syntax: hb_cmd_up_sid(sid_idx, ch_idx, param);
 static void hb_cmd_up_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     hb_sid_channel_t *c = &hb_sids[sid_idx].ch[ch_idx];
@@ -1599,6 +1763,9 @@ static void hb_cmd_up_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned 
 }
 
 // ---- Cmd89 Vo: volume (UA/SID; ignored on Cmd) ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — volume, low 6 bits used
+// Output: none (writes hardware volume register immediately)
+// Syntax: hb_cmd_vo_ua(ua_idx, param);
 static void hb_cmd_vo_ua(unsigned char ua_idx, unsigned char param)
 {
     volatile unsigned char *base = (volatile unsigned char *)(unsigned long)audio_ch_base[ua_idx];
@@ -1607,6 +1774,10 @@ static void hb_cmd_vo_ua(unsigned char ua_idx, unsigned char param)
     hb_ua[ua_idx].last_volume = vol;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — new sustain nibble (release untouched)
+// Output: none
+// Syntax: hb_cmd_vo_sid(sid_idx, ch_idx, param);
 static void hb_cmd_vo_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     // Sets the SUSTAIN nibble of EnvSR only, keeping RELEASE untouched.
@@ -1618,12 +1789,20 @@ static void hb_cmd_vo_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned 
 }
 
 // ---- Cmd8A Xt: nonzero param -> sync byte out; zero param -> kill/reset ----
+// Input:  ua_idx — Ultimate Audio channel, 0-6; param — nonzero = sync byte,
+//         0 = kill the channel
+// Output: none (writes hb_ext_out, or silences the channel)
+// Syntax: hb_cmd_xt_ua(ua_idx, param);
 static void hb_cmd_xt_ua(unsigned char ua_idx, unsigned char param)
 {
     if (param != 0) { hb_ext_out = param; return; }
     hb_ua[ua_idx].shadow_gate = 0x10;
 }
 
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         param — nonzero = sync byte, 0 = kill the channel
+// Output: none (writes hb_ext_out, or silences the channel)
+// Syntax: hb_cmd_xt_sid(sid_idx, ch_idx, param);
 static void hb_cmd_xt_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned char param)
 {
     if (param != 0) { hb_ext_out = param; return; }
@@ -1639,6 +1818,9 @@ static void hb_cmd_xt_sid(unsigned char sid_idx, unsigned char ch_idx, unsigned 
     }
 }
 
+// Input:  param — nonzero = sync byte, 0 = full player reset
+// Output: none (writes hb_ext_out, or resets all SID/UA state)
+// Syntax: hb_cmd_xt_cmd(param); // "Xt00 on Cmd channel resets everything"
 static void hb_cmd_xt_cmd(unsigned char param)
 {
     if (param != 0) { hb_ext_out = param; return; }
@@ -1649,6 +1831,12 @@ static void hb_cmd_xt_cmd(unsigned char param)
 // the per-channel-type handler, matching UACommandTable/SIDCommandTable/
 // CmdCommandTable's CmdNone gaps exactly. ----
 
+// hb_ua_track_cmd — dispatches a track command byte to the right Cmd8x_*
+// handler for a UA channel.
+// Input:  ua_idx — Ultimate Audio channel, 0-6
+//         cmd_byte — raw command byte (bit7 set, low 7 bits = command index)
+// Output: none
+// Syntax: hb_ua_track_cmd(ua_idx, note); // called when note&0x80 in the row buffer
 static void hb_ua_track_cmd(unsigned char ua_idx, unsigned char cmd_byte)
 {
     unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
@@ -1673,6 +1861,12 @@ static void hb_ua_track_cmd(unsigned char ua_idx, unsigned char cmd_byte)
     }
 }
 
+// hb_sid_track_cmd — dispatches a track command byte to the right Cmd8x_*
+// handler for a SID channel.
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+//         cmd_byte — raw command byte (bit7 set, low 7 bits = command index)
+// Output: none
+// Syntax: hb_sid_track_cmd(sid_idx, ch_idx, note);
 static void hb_sid_track_cmd(unsigned char sid_idx, unsigned char ch_idx, unsigned char cmd_byte)
 {
     unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
@@ -1698,6 +1892,12 @@ static void hb_sid_track_cmd(unsigned char sid_idx, unsigned char ch_idx, unsign
     }
 }
 
+// hb_cmd_channel_cmd — dispatches a track command byte on the Cmd channel
+// (row byte 63), which affects tempo/volume/pattern-length/slide-all/
+// sync globally rather than one specific channel.
+// Input:  cmd_byte — raw command byte (bit7 set, low 7 bits = command index)
+// Output: none
+// Syntax: hb_cmd_channel_cmd(hb_row_buf[62]); // called when hb_row_buf[62]&0x80
 static void hb_cmd_channel_cmd(unsigned char cmd_byte)
 {
     unsigned char idx = (unsigned char)(cmd_byte & 0x7F);
@@ -1748,6 +1948,13 @@ static void hb_cmd_channel_cmd(unsigned char cmd_byte)
 // tick with the portamento-active flag still set (the register value
 // itself is already correct), and is reproduced here exactly rather than
 // "cleaned up".
+// Input:  freq_lo/freq_hi     — pointers to the channel's current frequency
+//         target_lo/target_hi — pointers to the portamento target frequency
+//                                (target_hi < 0 means "not active")
+//         rate                — per-tick step size
+// Output: none (updates *freq_lo/*freq_hi, and disables the slide via
+//         *target_hi=0xFF once arrived)
+// Syntax: hb_modulate_portamento(&c->freq_lo, &c->freq_hi, &c->target_freq_lo, &c->target_freq_hi, c->portamento);
 // ---------------------------------------------------------------
 static void hb_modulate_portamento(unsigned char *freq_lo, unsigned char *freq_hi,
                                     unsigned char *target_lo, unsigned char *target_hi,
@@ -1800,6 +2007,10 @@ static void hb_modulate_portamento(unsigned char *freq_lo, unsigned char *freq_h
 // around an Oscar64 -O2 optimizer non-termination warning ("Optimizer
 // locked in infinite loop") seen when this logic was inlined twice in a
 // function with this shape -- see oscar64manual.md.
+// Input:  bounce — chip's cutoff_bounce byte (bit7 = stop-vs-bounce flag)
+//         mod    — current cutoff_mod rate/direction byte
+// Output: the new cutoff_mod value after hitting a clamp
+// Syntax: chip->cutoff_mod = hb_cutoff_bounce_step(chip->cutoff_bounce, chip->cutoff_mod);
 // ---------------------------------------------------------------
 static unsigned char hb_cutoff_bounce_step(unsigned char bounce, unsigned char mod)
 {
@@ -1809,6 +2020,9 @@ static unsigned char hb_cutoff_bounce_step(unsigned char bounce, unsigned char m
 
 // ---------------------------------------------------------------
 // hb_modulate_sid_filter — port of ModulateSIDandUA's filter-cutoff half.
+// Input:  chip — pointer to the SID chip to sweep
+// Output: none (updates chip->filter_lo/filter_hi/cutoff_mod)
+// Syntax: hb_modulate_sid_filter(&hb_sids[i]); // called once per chip, every tick
 // ---------------------------------------------------------------
 static void hb_modulate_sid_filter(hb_sid_chip_t *chip)
 {
@@ -1858,6 +2072,9 @@ static void hb_modulate_sid_filter(hb_sid_chip_t *chip)
 // .portadone is the fallthrough for every path, not just the active-slide
 // ones), reusing audio_channel_set_rate for the actual hardware write
 // (same register-order convention as hb_trigger_sample()'s own UA writes).
+// Input:  ua_idx — Ultimate Audio channel, 0-6
+// Output: none (writes the hardware rate register every call)
+// Syntax: hb_modulate_ua_channel(ua_idx); // called once per channel, every tick
 // ---------------------------------------------------------------
 static void hb_modulate_ua_channel(unsigned char ua_idx)
 {
@@ -1882,6 +2099,9 @@ static void hb_modulate_ua_channel(unsigned char ua_idx)
 // unconditionally every tick for every SID channel (matches the source --
 // there's no "is this channel playing" gate here; silent channels just
 // modulate silently until their next note-trigger overwrites the state).
+// Input:  sid_idx, ch_idx — SID chip (0-7) and channel within it (0-2)
+// Output: none (updates hb_sids[sid_idx].ch[ch_idx]'s active register image)
+// Syntax: hb_modulate_channel(sid_idx, ch_idx); // called once per channel, every tick
 // ---------------------------------------------------------------
 static void hb_modulate_channel(unsigned char sid_idx, unsigned char ch_idx)
 {
@@ -2031,6 +2251,9 @@ static void hb_modulate_channel(unsigned char sid_idx, unsigned char ch_idx)
 // hb_modulations — port of Modulations's top-level dispatch loop. See the
 // "Modulations" section comment above for why this is two plain loops
 // instead of the source's one shared-index loop.
+// Input:  none
+// Output: none (updates every SID/UA channel's modulation state)
+// Syntax: hb_modulations(); // called by hb_tick() every tick, unconditionally
 // ---------------------------------------------------------------
 static void hb_modulations(void)
 {
@@ -2065,6 +2288,7 @@ static void hb_modulations(void)
 // which can be called from within it via a Bt command and must preserve
 // the caller's interrupt state), so unconditionally enabling interrupts
 // on exit is correct here.
+// See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_play_fx(unsigned char ch, unsigned char sample, unsigned char note)
 {
@@ -2077,7 +2301,7 @@ void hb_play_fx(unsigned char ch, unsigned char sample, unsigned char note)
 }
 
 // ---------------------------------------------------------------
-// hb_stop_fx — port of StopFX.
+// hb_stop_fx — port of StopFX. See hbplayer.h for the full Input/Output/Syntax.
 // ---------------------------------------------------------------
 void hb_stop_fx(unsigned char ch)
 {

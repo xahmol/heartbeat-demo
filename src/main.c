@@ -92,6 +92,11 @@
 // Helpers
 // ---------------------------------------------------------------
 
+// fmt_dec — formats an unsigned char as a decimal ASCII string, no leading zeros.
+// Input:  buf — destination buffer, must have room for up to 4 bytes ("255"+NUL)
+//         val — value to format (0-255)
+// Output: none (result written to buf, NUL-terminated)
+// Syntax: char out[4]; fmt_dec(out, 42); // out = "42"
 static void fmt_dec(char *buf, unsigned char val)
 {
     char i = 0;
@@ -105,9 +110,14 @@ static void fmt_dec(char *buf, unsigned char val)
     buf[i] = 0;
 }
 
-// Copy UCI response string, uppercasing and filtering to printable ASCII.
-// petscii.h remaps source letters, so UCI data (raw ASCII) must be
-// converted explicitly to PETSCII uppercase for correct display.
+// uci_to_upper — copies the current UCI response (uii_data[]) into dst,
+// uppercasing and filtering to printable ASCII. petscii.h remaps source
+// letters, so UCI data (raw ASCII) must be converted explicitly to PETSCII
+// uppercase for correct on-screen display.
+// Input:  dst    — destination buffer, must have room for maxlen+1 bytes
+//         maxlen — maximum characters to copy (excluding NUL terminator)
+// Output: number of characters written to dst (excluding NUL terminator)
+// Syntax: char detail[26]; char len = uci_to_upper(detail, 24);
 static char uci_to_upper(char *dst, char maxlen)
 {
     char i, j = 0;
@@ -130,12 +140,24 @@ static char uci_to_upper(char *dst, char maxlen)
 }
 
 // ---------------------------------------------------------------
-// NMI handler — prevents RESTORE key from resetting the demo.
+// nmi_handler — installed at the NMI vector ($0318) so the RESTORE key
+// (which triggers an NMI on real hardware) does nothing instead of
+// resetting/interrupting the demo.
+// Input:  none (hardware-invoked NMI handler, not called directly)
+// Output: none
+// Syntax: *((void **)0x0318) = nmi_handler; // install once at startup
 // ---------------------------------------------------------------
 __hwinterrupt void nmi_handler(void) {}
 
 // ---------------------------------------------------------------
-// int main
+// main — program entry point: patches KERNAL vectors for MMAP_NO_BASIC
+// safety, runs hardware detection (UCI/REU/turbo/Ultimate Audio), loads
+// and plays the active Heartbeat song, hands off to the note visualiser,
+// then restores the screen and returns to BASIC.
+// Input:  none
+// Output: 0 on normal exit; 1 if a required hardware check failed
+//         (UCI/REU missing) and the demo aborted early
+// Syntax: not called directly -- this is the C64 program's entry point
 // ---------------------------------------------------------------
 int main(void)
 {
@@ -291,7 +313,7 @@ int main(void)
             screen_hint("Place .reu in idi8b/heartbeat-demo/");
         }
 
-        // ---- Start playback (Phases 3-9, all hardware-verified) --------
+        // ---- Start playback (hardware-verified) --------
         if (song_loaded)
         {
             // Engage turbo before playback starts. detect_turbo() (above)

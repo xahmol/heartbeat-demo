@@ -96,6 +96,10 @@ Supported hardware:
 // Function prototypes
 // ---------------------------------------------------------------
 
+// benchmark_delay — run a deliberately slow CPU loop and return elapsed real time.
+// Input:  iters — outer loop iteration count to burn CPU cycles (see ITERS).
+// Output: elapsed time in CIA1 TOD tenths of a second (10ths; range 0–99 for <10 s).
+// Syntax: unsigned int t = benchmark_delay(ITERS);
 int benchmark_delay(int iters);
 /*
   Run a deliberately slow CPU loop and return elapsed time in
@@ -111,6 +115,9 @@ int benchmark_delay(int iters);
   SEI/CLI wraps the measurement.
 */
 
+// turbo_detect — detect the turbo speed class via CIA TOD real-time measurement.
+// Output: TURBO_NOT_PRESENT, TURBO_48MHZ, or TURBO_64MHZ (see thresholds below).
+// Syntax: char cls = turbo_detect();
 char turbo_detect(void);
 /*
   Detect turbo status via CIA TOD timing.
@@ -128,6 +135,10 @@ char turbo_detect(void);
   Call once at startup; takes a few seconds at 1 MHz.
 */
 
+// turbo_set — write a control byte directly to $D031 and enable via $D030.
+// Input:  control — speed_index | badlines_flag, e.g. TURBO_SPEED_MAX | TURBO_BADLINES_OFF.
+// Output: none.
+// Syntax: turbo_set(TURBO_FULL);
 void turbo_set(char control);
 /*
   Write `control` directly to $D031 and enable via $D030.
@@ -140,12 +151,21 @@ void turbo_set(char control);
   Change takes effect on the very next CPU cycle.
 */
 
+// turbo_fast — shorthand to switch the CPU to maximum turbo speed with badlines suppressed.
+// Output: none.
+// Syntax: turbo_fast();
 void turbo_fast(void);
 // Shorthand: turbo_set(TURBO_SPEED_MAX | TURBO_BADLINES_OFF).
 
+// turbo_slow — shorthand to drop the CPU back to standard 1 MHz speed.
+// Output: none.
+// Syntax: turbo_slow();
 void turbo_slow(void);
 // Shorthand: turbo_set(TURBO_SPEED_1MHZ).
 
+// turbo_get — read back the current $D031 control byte.
+// Output: the current $D031 value (0xFF if turbo registers not available).
+// Syntax: unsigned char d031 = turbo_get();
 unsigned char turbo_get(void);
 // Read the current $D031 value (0xFF if registers not available).
 

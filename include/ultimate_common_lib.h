@@ -164,19 +164,78 @@ extern struct DevInfo uii_devinfo[4];
 // 3 = Printerindo
 
 // prototypes
+
+// uii_detect — Check whether the UCI hardware is present at $DF1D.
+// Output: 1 if detected (id register reads 0xC9; UCI is also reset via uii_abort()), 0 if not present.
+// Syntax: if (!uii_detect()) { /* no Ultimate cartridge present */ }
 char uii_detect(void);
+
+// uii_settarget — Set the target subsystem (DOS1/DOS2/NETWORK/CONTROL) for the next command.
+// Input:  id — target ID: TARGET_DOS1, TARGET_DOS2, TARGET_NETWORK, or TARGET_CONTROL.
+// Output: none.
+// Syntax: uii_settarget(TARGET_CONTROL);
 void uii_settarget(char id);
+
+// uii_freeze — Trigger a freeze (cartridge freeze-button equivalent) via the control interface.
+// Output: none.
+// Syntax: uii_freeze();
 void uii_freeze(void);
+
+// uii_identify — Query the UCI firmware identification string (e.g. "ULTIMATE-II DOS V1.4").
+// Output: identification string in uii_data[]; status is always "00,OK".
+// Syntax: uii_identify();
 void uii_identify(void);
+
+// uii_echo — Test command: sends the command packet and receives it back as data.
+// Output: echo of the sent command in uii_data[]; status is always "00,OK".
+// Syntax: uii_echo();
 void uii_echo(void);
+
+// uii_getinterfacecount — Get the number of network interfaces on the Ultimate device.
+// Output: interface count in uii_data[0]; the previously active target is saved and restored.
+// Syntax: uii_getinterfacecount();
 void uii_getinterfacecount(void);
+
+// uii_sendcommand — Send a raw command packet to the UCI (lowest-level send primitive); waits for the UCI to be idle and retries if the error bit is set.
+// Input:  bytes — command buffer; bytes[0] is overwritten with the current uii_target, bytes[1] is the opcode, remaining bytes are arguments.
+// Input:  count — total number of bytes to send, including the target and opcode bytes.
+// Output: none.
+// Syntax: char cmd[] = {0x00, DOS_CMD_IDENTIFY}; uii_sendcommand(cmd, 2);
 void uii_sendcommand(char *bytes, unsigned count);
+
+// uii_accept — Acknowledge completion of a UCI response and release the UCI for the next command.
+// Output: none; must be called after draining all response data and status.
+// Syntax: uii_readdata(); uii_readstatus(); uii_accept();
 void uii_accept(void);
+
+// uii_isdataavailable — Check whether the UCI data FIFO has bytes to read (status bit 7).
+// Output: 1 if data is available, 0 if not.
+// Syntax: while (uii_isdataavailable()) { uii_readdata(); uii_accept(); }
 char uii_isdataavailable(void);
+
+// uii_ismoredataavailable — Check whether more packets follow in a multi-packet transfer (status bits 4 and 5 both set).
+// Output: 1 if more packets follow, 0 if this is the last packet.
+// Syntax: while (uii_isdataavailable() || uii_ismoredataavailable()) { uii_readdata(); uii_accept(); }
 char uii_ismoredataavailable(void);
+
+// uii_isstatusdataavailable — Check whether the UCI status FIFO has bytes to read (status bit 6).
+// Output: 1 if status data is available, 0 if not.
+// Syntax: while (uii_isstatusdataavailable()) { uii_readstatus(); }
 char uii_isstatusdataavailable(void);
+
+// uii_abort — Abort the current UCI operation by setting the ABORT bit in the control register.
+// Output: none; does not wait for confirmation.
+// Syntax: uii_abort();
 void uii_abort(void);
+
+// uii_readdata — Drain the UCI response data FIFO into uii_data[].
+// Output: number of bytes read (0 if no data available); uii_data[] is always null-terminated.
+// Syntax: unsigned n = uii_readdata();
 unsigned uii_readdata(void);
+
+// uii_readstatus — Drain the UCI status FIFO into uii_status[].
+// Output: number of status bytes read; uii_status[] is always null-terminated. UII_SUCCESS is valid after this call.
+// Syntax: uii_readstatus(); if (UII_SUCCESS) { ... }
 unsigned uii_readstatus(void);
 
 #pragma compile("ultimate_common_lib.c")

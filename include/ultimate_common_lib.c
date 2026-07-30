@@ -34,9 +34,10 @@ struct DevInfo uii_devinfo[4];
 // Core functions
 
 void uii_logtext(const char *text)
-// Log text for debugging
-// Input: text - the text to log
-// Only activated with DEBUG defined
+// uii_logtext — Log text for debugging; a no-op unless DEBUG is defined.
+// Input:  text — the text to log.
+// Output: none.
+// Syntax: uii_logtext("\nwaiting...");
 {
 #ifdef DEBUG
 	printf("%s", text);
@@ -46,8 +47,9 @@ void uii_logtext(const char *text)
 }
 
 void uii_logstatusreg(void)
-// Log the status register for debugging
-// Only activated with DEBUG defined
+// uii_logstatusreg — Log the UCI status register value for debugging; a no-op unless DEBUG is defined.
+// Output: none.
+// Syntax: uii_logstatusreg();
 {
 #ifdef DEBUG
 	printf("\nstatus reg %4x = %2x", &uii_reg_read.status, uii_reg_read.status);
@@ -55,10 +57,9 @@ void uii_logstatusreg(void)
 }
 
 char uii_detect(void)
-// Detect present of UCI via ID_REG. Value should be $C9
-// Output:
-//	1 = detected
-//	0 = not detected
+// uii_detect — Detect presence of the UCI via the ID register ($DF1D); value should be $C9.
+// Output: 1 = detected (UCI is also reset via uii_abort()), 0 = not detected.
+// Syntax: if (!uii_detect()) { /* no Ultimate cartridge present */ }
 {
 	if (uii_reg_read.id == 0xc9)
 	{
@@ -76,14 +77,18 @@ char uii_detect(void)
 }
 
 void uii_settarget(char id)
-// Set the target for the next command
-// Input: id - the target ID -> 1 = DOS1, 2 = DOS2, 3 = NETWORK, 4 = CONTROL
+// uii_settarget — Set the target subsystem for the next command.
+// Input:  id — the target ID: TARGET_DOS1 (1), TARGET_DOS2 (2), TARGET_NETWORK (3), TARGET_CONTROL (4).
+// Output: none.
+// Syntax: uii_settarget(TARGET_CONTROL);
 {
 	uii_target = id;
 }
 
 void uii_freeze(void)
-// Freeze the UCI
+// uii_freeze — Trigger a freeze (cartridge freeze-button equivalent) via the control interface.
+// Output: none.
+// Syntax: uii_freeze();
 {
 	char cmd[] = {0x00, 0x05};
 
@@ -96,10 +101,12 @@ void uii_freeze(void)
 }
 
 void uii_identify(void)
-// Identify the UCI
+// uii_identify — Identify the UCI.
 // The "Identify" command sends back an identification string, such as "ULTIMATE-II DOS V1.0". The
 // user software can use this function to query which targets exist, or to obtain version information.
 // The status channel will report "00,OK", as this command cannot fail.
+// Output: identification string in uii_data[]; status is always "00,OK".
+// Syntax: uii_identify();
 {
 	char cmd[] = {0x00, DOS_CMD_IDENTIFY};
 	uii_settarget(TARGET_DOS1);
@@ -110,9 +117,11 @@ void uii_identify(void)
 }
 
 void uii_echo(void)
-// Echo the command
+// uii_echo — Echo the command back as data (test command).
 // This command will simply echo the command back as a data packet. The status channel will return
 // "00,OK", as this command cannot fail.
+// Output: echo of the sent command in uii_data[]; status is always "00,OK".
+// Syntax: uii_echo();
 {
 	char cmd[] = {0x00, DOS_CMD_ECHO};
 	uii_settarget(TARGET_DOS1);
@@ -124,7 +133,9 @@ void uii_echo(void)
 }
 
 void uii_getinterfacecount(void)
-// Get the number of network interfaces
+// uii_getinterfacecount — Get the number of network interfaces on the Ultimate device.
+// Output: interface count in uii_data[0]; the previously active target is saved and restored.
+// Syntax: uii_getinterfacecount();
 {
 	char tempTarget = uii_target;
 	char cmd[] = {0x00, NET_CMD_GET_INTERFACE_COUNT};
@@ -140,9 +151,11 @@ void uii_getinterfacecount(void)
 }
 
 void uii_sendcommand(char *bytes, unsigned count)
-// Send a command to the UCI
-// Input: bytes - the command bytes to send
-//        count - the number of bytes to send
+// uii_sendcommand — Send a raw command packet to the UCI (lowest-level send primitive); waits for the UCI to be idle and retries if the error bit is set.
+// Input:  bytes — command buffer; bytes[0] is overwritten with the current uii_target, bytes[1] is the opcode, remaining bytes are arguments.
+// Input:  count — total number of bytes to send, including the target and opcode bytes.
+// Output: none.
+// Syntax: char cmd[] = {0x00, DOS_CMD_IDENTIFY}; uii_sendcommand(cmd, 2);
 {
 	unsigned x = 0;
 	char success = 0;
@@ -196,7 +209,9 @@ void uii_sendcommand(char *bytes, unsigned count)
 }
 
 void uii_accept(void)
-// Acknowledge the data
+// uii_accept — Acknowledge completion of a UCI response and release the UCI for the next command.
+// Output: none; must be called after draining all response data and status.
+// Syntax: uii_readdata(); uii_readstatus(); uii_accept();
 {
 	uii_logstatusreg();
 	uii_logtext("\nsending ack");
@@ -209,7 +224,9 @@ void uii_accept(void)
 }
 
 char uii_isdataavailable(void)
-// Check if data is available
+// uii_isdataavailable — Check whether the UCI data FIFO has bytes to read (status bit 7).
+// Output: 1 if data is available, 0 if not.
+// Syntax: while (uii_isdataavailable()) { uii_readdata(); uii_accept(); }
 {
 	if (((uii_reg_read.status & 128) == 128))
 	{
@@ -222,7 +239,9 @@ char uii_isdataavailable(void)
 }
 
 char uii_ismoredataavailable(void)
-// Check if more data is available
+// uii_ismoredataavailable — Check whether more packets follow in a multi-packet transfer (status bits 4 and 5 both set).
+// Output: 1 if more packets follow, 0 if this is the last packet.
+// Syntax: while (uii_isdataavailable() || uii_ismoredataavailable()) { uii_readdata(); uii_accept(); }
 {
 	if (((uii_reg_read.status & 48) == 48))
 	{
@@ -235,7 +254,9 @@ char uii_ismoredataavailable(void)
 }
 
 char uii_isstatusdataavailable(void)
-// Check if status data is available
+// uii_isstatusdataavailable — Check whether the UCI status FIFO has bytes to read (status bit 6).
+// Output: 1 if status data is available, 0 if not.
+// Syntax: while (uii_isstatusdataavailable()) { uii_readstatus(); }
 {
 	if (((uii_reg_read.status & 64) == 64))
 		return 1;
@@ -244,7 +265,9 @@ char uii_isstatusdataavailable(void)
 }
 
 void uii_abort(void)
-// Abort the command
+// uii_abort — Abort the current UCI operation by setting the ABORT bit in the control register.
+// Output: none; does not wait for confirmation.
+// Syntax: uii_abort();
 {
 	uii_logstatusreg();
 	uii_logtext("\nsending abort");
@@ -252,7 +275,9 @@ void uii_abort(void)
 }
 
 unsigned uii_readdata(void)
-// Read data from the UCI
+// uii_readdata — Drain the UCI response data FIFO into uii_data[].
+// Output: number of bytes read (0 if no data available); uii_data[] is always null-terminated and capped at DATA_QUEUE_SZ bytes.
+// Syntax: unsigned n = uii_readdata();
 {
 	unsigned count = 0;
 	uii_data[0] = 0;
@@ -278,7 +303,9 @@ unsigned uii_readdata(void)
 }
 
 unsigned uii_readstatus(void)
-// Read status from the UCI
+// uii_readstatus — Drain the UCI status FIFO into uii_status[].
+// Output: number of status bytes read; uii_status[] is always null-terminated and capped at STATUS_QUEUE_SZ bytes. UII_SUCCESS is valid after this call.
+// Syntax: uii_readstatus(); if (UII_SUCCESS) { ... }
 {
 	unsigned count = 0;
 	uii_status[0] = 0;

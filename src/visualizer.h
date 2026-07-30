@@ -15,11 +15,14 @@
 
 void visualizer_run(void);
 // Switches to the visualiser's own screen (clears, draws header/labels/
-// footer instructions), then loops once per VIC frame -- decaying and
-// redrawing every channel's bar, and polling the same buttons.s key
-// bindings the test harness always had (SPACE/RUN-STOP/A-O/X), plus 'S' to
-// switch songs -- until RETURN is pressed, at which point it returns to
-// the caller.
+// hint line), then loops once per VIC frame -- decaying and redrawing
+// every channel's bar plus plasma/spectroscope/scroller, and polling the
+// same buttons.s key bindings the test harness always had (SPACE/RUN-STOP/
+// A-O/X), plus 'S' to switch songs -- until RETURN is pressed, at which
+// point it returns to the caller.
+// Input:  none (reads the live hb_vis_events[]/hb_songdata globals)
+// Output: none (blocks until RETURN is pressed)
+// Syntax: hb_init(0, 1); visualizer_run(); hb_stop_all();
 
 // Song table shared with main.c (which loads vis_song_files[vis_song_index]
 // at startup, index 0, before the visualiser's own 'S' key can switch it).

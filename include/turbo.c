@@ -17,9 +17,11 @@ See turbo.h for API documentation.
 #define TURBO_D031  (*(volatile unsigned char *)0xD031)
 
 #pragma optimize(0);
+// benchmark_delay — burn CPU cycles in a deliberately unoptimised loop and measure real elapsed time.
 // Measues in CIA TOD time units (1/10th of a second).  With turbo off, 1500 iters ≈ 1 second.
-// Input: iters = number of loop iterations to burn CPU cycles.
+// Input:  iters — number of loop iterations to burn CPU cycles.
 // Output: elapsed time in 1/10ths of a second.  With turbo off, result ≈ iters / 1500.
+// Syntax: unsigned int t = benchmark_delay(ITERS);
 __noinline int benchmark_delay(int iters)
 {
     volatile int i,j;
@@ -42,11 +44,13 @@ __noinline int benchmark_delay(int iters)
 #pragma optimize(1);
 
 // ---------------------------------------------------------------
-// turbo_detect
+// turbo_detect — classify turbo speed via CIA1 TOD real-time measurement.
 //
 // Measures CPU speed via CIA1 TOD timing using benchmark_delay().
 // See turbo.h for threshold definitions and TURBOCONTROLMANUAL.md
 // for a full explanation of the detection method.
+// Output: TURBO_NOT_PRESENT, TURBO_48MHZ, or TURBO_64MHZ.
+// Syntax: char cls = turbo_detect();
 // ---------------------------------------------------------------
 char turbo_detect(void)
 {
@@ -78,6 +82,9 @@ char turbo_detect(void)
 
 // ---------------------------------------------------------------
 // turbo_set — sets speed via $D030 + $D031 (both firmware modes)
+// Input:  control — speed_index | badlines_flag, e.g. TURBO_FULL.
+// Output: none.
+// Syntax: turbo_set(TURBO_SPEED_24MHZ | TURBO_BADLINES_ON);
 // ---------------------------------------------------------------
 void turbo_set(char control)
 {
@@ -90,7 +97,17 @@ void turbo_set(char control)
     }
 }
 
+// turbo_fast — shorthand to switch the CPU to maximum turbo speed with badlines suppressed.
+// Output: none.
+// Syntax: turbo_fast();
 void turbo_fast(void) { turbo_set(TURBO_SPEED_MAX | TURBO_BADLINES_OFF); }
+
+// turbo_slow — shorthand to drop the CPU back to standard 1 MHz speed.
+// Output: none.
+// Syntax: turbo_slow();
 void turbo_slow(void) { turbo_set(TURBO_SPEED_1MHZ); }
 
+// turbo_get — read back the current $D031 control byte.
+// Output: the current $D031 value (0xFF if turbo registers not available).
+// Syntax: unsigned char d031 = turbo_get();
 unsigned char turbo_get(void) { return TURBO_D031; }

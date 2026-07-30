@@ -216,35 +216,65 @@ char hb_load(char *filename, unsigned long reu_addr);
 // (uii_scan_media/uii_find_media_path + uii_open_file/uii_load_reu,
 // same pattern as UltimateDemo2026's modplay_load), then reu_fetch()
 // the $2000-byte song-data header into hb_songdata. Sets hb_state.reu_song_base.
-// Returns 1 on success, 0 on failure.
+// Input:  filename — .reu path to search for on SD/USB (see hb_load()'s own
+//                    comment in hbplayer.c for the install-path convention)
+//         reu_addr — REU base address to load the file into (HB_SONG_REU_BASE
+//                    for this project's own single-song-at-a-time usage)
+// Output: 1 on success, 0 if the file could not be found or loaded
+// Syntax: char ok = hb_load("My Song.reu", HB_SONG_REU_BASE);
 
 char hb_detect_ntsc(void);
 // Raster-line PAL/NTSC detection (DetectNTSC port). Sets hb_state.ntsc_detected.
 // Call once at startup, before hb_init().
+// Input:  none
+// Output: 1 if NTSC timing detected, 0 if PAL; also sets hb_state.ntsc_detected
+// Syntax: hb_detect_ntsc(); hb_init(0, 1);
 
 void hb_init(unsigned char seq_start_pos, unsigned char play_mode);
 // PlayerInit port: reset player state, init SID images/volumes and UA
 // channels, set starting tempo, and install the tick IRQ at $0314/$0315.
 // Call hb_detect_ntsc() before this.
+// Input:  seq_start_pos — sequencer step to start playback from (usually 0)
+//         play_mode     — 0 = idle (registers still flush every tick, no new
+//                         rows played), 1 = play the song
+// Output: none
+// Syntax: hb_init(0, 1); // start playing from the beginning
 
 void hb_stop_all(void);
 // StopAllSound port: stop playback, silence all SIDs/UA channels.
+// Input:  none
+// Output: none
+// Syntax: hb_stop_all();
 
 void hb_set_tempo(unsigned char bpm_minus_64);
 // SetTempo port: A = BPM-64 (0-255 -> 64-319 BPM). Reprograms CIA1 Timer A
 // from the embedded BPM table, applying the NTSC delta if hb_state.ntsc_detected.
+// Input:  bpm_minus_64 — desired tempo, encoded as BPM-64
+// Output: none
+// Syntax: hb_set_tempo(60); // BPM = 60+64 = 124
 
 void hb_play_fx(unsigned char ch, unsigned char sample, unsigned char note);
 // PlayFX port: play `sample` (1-64) at `note` (2-95, C-4=0x26) on UA channel ch (0-6).
+// Input:  ch     — Ultimate Audio channel, 0-6
+//         sample — sample/instrument number, 1-64 (indexes hb_songdata.sample_params)
+//         note   — note pitch, 2-95 (0x26 = C-4 = 44100 Hz)
+// Output: none
+// Syntax: hb_play_fx(6, 1, 0x26); // play sample 1 at C-4 on channel 6
 
 void hb_stop_fx(unsigned char ch);
 // StopFX port: stop note on UA channel ch (0-6); releases loop first if loop mode 2.
+// Input:  ch — Ultimate Audio channel, 0-6
+// Output: none
+// Syntax: hb_stop_fx(6);
 
 void hb_fetch_pattern_row(void);
 // FetchPatternRow port: fetches the next pattern row into hb_row_buf via
 // reu_fetch(), advancing the sequencer/pattern pointers as needed. Called
 // internally by hb_tick's dispatch (ahead of a hard-restart); exposed here
 // mainly for diagnostics (e.g. printing raw row bytes).
+// Input:  none
+// Output: none (result written to hb_row_buf[64])
+// Syntax: hb_fetch_pattern_row(); // then inspect hb_row_buf[] directly
 
 extern hb_songdata_t hb_songdata;
 
@@ -298,6 +328,9 @@ void hb_vis_reset(void);
 // internally by the player (matches the original -- VisualizerReset has
 // no internal caller in player.s either) -- for a visualizer to call e.g.
 // when switching modes or restarting the song.
+// Input:  none
+// Output: none
+// Syntax: hb_vis_reset();
 
 #pragma compile("hbplayer.c")
 
